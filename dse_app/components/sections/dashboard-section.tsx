@@ -20,7 +20,7 @@ interface DashboardSectionProps {
 const quickActions = [
   {
     id: "past-papers",
-    title: "Past Papers",
+    title: "Past Papers Gradings",
     description: "Grade your DSE past paper answers",
     icon: FileText,
     color: "bg-secondary",

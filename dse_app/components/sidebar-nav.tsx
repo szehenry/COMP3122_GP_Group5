@@ -20,7 +20,7 @@ interface SidebarNavProps {
 
 const navItems = [
   { id: "dashboard", label: "Dashboard", icon: Home },
-  { id: "past-papers", label: "Past Papers", icon: FileText },
+  { id: "past-papers", label: "Past Papers Gradings", icon: FileText },
   { id: "grade-prediction", label: "Grade Prediction", icon: LineChart },
   { id: "best5-calculator", label: "Best 5 Calculator", icon: Calculator },
   { id: "university-intake", label: "University Intake", icon: GraduationCap },
