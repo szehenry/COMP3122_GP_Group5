@@ -285,7 +285,8 @@ export function PastPapersSection() {
                     <div className="rounded-xl border-2 border-dashed border-border bg-muted/30 p-8 text-center">
                       <FileText className="mx-auto h-12 w-12 text-muted-foreground/50" />
                       <p className="mt-3 text-muted-foreground">
-                        {gradingResult.perQuestion.find((q: any) => q.q === selectedResultQuestion)?.solution || 'No solution.'}
+                        {gradingResult.perQuestion.find((q: any) => q.q === selectedResultQuestion)?.solution
+                          || 'No solution available from AI output.'}
                       </p>
                     </div>
                   </TabsContent>
@@ -293,11 +294,20 @@ export function PastPapersSection() {
                     <div className="rounded-xl border-2 border-dashed border-border bg-muted/30 p-8 text-center">
                       <CheckCircle className="mx-auto h-12 w-12 text-muted-foreground/50" />
                       <p className="mt-3 text-muted-foreground">
-                        {gradingResult.perQuestion.find((q: any) => q.q === selectedResultQuestion)?.concepts || 'No concepts.'}
+                        {gradingResult.perQuestion.find((q: any) => q.q === selectedResultQuestion)?.concepts
+                          || 'Key concepts were not returned for this question.'}
                       </p>
                     </div>
                   </TabsContent>
                 </Tabs>
+                {gradingResult.rawResult && (
+                  <details className="mt-4 rounded border border-border p-3">
+                    <summary className="cursor-pointer font-medium">Show Raw AI Output</summary>
+                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">
+{gradingResult.rawResult}
+                    </pre>
+                  </details>
+                )}
               </div>
             ) : null
           ) : (
