@@ -72,7 +72,7 @@ export function PastPapersSection() {
             Upload Files (By question)
           </CardTitle>
           <CardDescription>
-            Upload the question paper, your answer, and the marking scheme (PDF only for marking scheme)
+            Upload the question paper, your answer, and the marking scheme
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -126,12 +126,12 @@ export function PastPapersSection() {
             </div>
             {/* Marking Scheme Upload */}
             <div className="space-y-3">
-              <h3 className="font-semibold text-foreground">Marking Scheme (PDF only)</h3>
+              <h3 className="font-semibold text-foreground">Marking Scheme</h3>
               <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-secondary bg-secondary/5 p-4">
                 {renderFilePreview(markingSchemeFile) || <CheckCircle className="mx-auto h-12 w-12 text-muted-foreground/50" />}
                 <input
                   type="file"
-                  accept="application/pdf"
+                  accept="application/pdf,image/*"
                   className="hidden"
                   ref={markingSchemeInputRef}
                   onChange={e => setMarkingSchemeFile(e.target.files?.[0] || null)}
