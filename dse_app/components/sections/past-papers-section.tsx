@@ -13,6 +13,15 @@ export function PastPapersSection() {
   const [gradingResult, setGradingResult] = useState<any>(null)
   const [gradingLoading, setGradingLoading] = useState(false)
   const [paperType, setPaperType] = useState<string>("")
+  const [sourceMode, setSourceMode] = useState<"upload" | "example">("upload")
+  const [sampleFileMap, setSampleFileMap] = useState<Record<string, File | null>>({
+    paper1Question: null,
+    paper1Answer: null,
+    paper1Marking: null,
+    paper2Question: null,
+    paper2Marking: null,
+  })
+  const [sampleUploadStatus, setSampleUploadStatus] = useState<Record<string, string>>({})
 
   // File input refs
   const questionInputRef = useRef<HTMLInputElement>(null)
@@ -33,14 +42,18 @@ export function PastPapersSection() {
 
   // Handle grading
   const handleGrade = async () => {
-    if (!questionFile || !answerFile || !markingSchemeFile || !paperType) return
+    if (!paperType) return
+    if (sourceMode === 'upload' && (!questionFile || !answerFile || !markingSchemeFile)) return
     setGradingLoading(true)
     try {
       const formData = new FormData()
-      formData.append('question', questionFile)
-      formData.append('answer', answerFile)
-      formData.append('markingScheme', markingSchemeFile)
+      formData.append('sourceMode', sourceMode)
       formData.append('paperType', paperType)
+      if (sourceMode === 'upload') {
+        formData.append('question', questionFile as File)
+        formData.append('answer', answerFile as File)
+        formData.append('markingScheme', markingSchemeFile as File)
+      }
       // TODO: Add user_id if available
       const res = await fetch('/api/grade-paper', {
         method: 'POST',
@@ -69,6 +82,32 @@ export function PastPapersSection() {
       setGradingResult({ error: message, perQuestion: [] })
     } finally {
       setGradingLoading(false)
+    }
+  }
+
+  const uploadSampleFile = async (sampleKey: string) => {
+    const file = sampleFileMap[sampleKey]
+    if (!file) return
+    setSampleUploadStatus((prev) => ({ ...prev, [sampleKey]: 'Uploading...' }))
+    try {
+      const formData = new FormData()
+      formData.append('sampleKey', sampleKey)
+      formData.append('file', file)
+      const res = await fetch('/api/sample-files-upload', {
+        method: 'POST',
+        body: formData,
+      })
+      const text = await res.text()
+      const data = text ? JSON.parse(text) : {}
+      if (!res.ok) {
+        throw new Error(data?.details || data?.hint || data?.error || 'Upload failed')
+      }
+      setSampleUploadStatus((prev) => ({ ...prev, [sampleKey]: 'Uploaded' }))
+    } catch (e) {
+      setSampleUploadStatus((prev) => ({
+        ...prev,
+        [sampleKey]: e instanceof Error ? `Failed: ${e.message}` : 'Failed',
+      }))
     }
   }
 
@@ -111,56 +150,98 @@ export function PastPapersSection() {
               <option value="paper2">Paper 2 (MC Questions)</option>
             </select>
           </div>
+          <div className="mb-4">
+            <label className="text-sm font-medium text-foreground mr-2">File Source:</label>
+            <select
+              className="border rounded px-2 py-1"
+              value={sourceMode}
+              onChange={e => setSourceMode(e.target.value as "upload" | "example")}
+              required
+            >
+              <option value="upload">Upload file</option>
+              <option value="example">Example question, user answer, and marking schemes</option>
+            </select>
+          </div>
           <div className="grid gap-6 lg:grid-cols-3">
             {/* Question Paper Upload */}
             <div className="space-y-3">
               <h3 className="font-semibold text-foreground">Question Paper</h3>
               <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-secondary bg-secondary/5 p-4">
-                {renderFilePreview(questionFile) || <FileText className="mx-auto h-12 w-12 text-muted-foreground/50" />}
-                <input
-                  type="file"
-                  accept="application/pdf,image/*"
-                  className="hidden"
-                  ref={questionInputRef}
-                  onChange={e => setQuestionFile(e.target.files?.[0] || null)}
-                />
-                <Button variant="secondary" className="mt-2" onClick={() => questionInputRef.current?.click()}>
-                  {questionFile ? 'Change File' : 'Choose File'}
-                </Button>
+                {sourceMode === 'example' ? (
+                  <p className="my-4 text-sm text-muted-foreground">
+                    {paperType === 'paper2'
+                      ? 'You have chosen example question (Paper 2).'
+                      : 'You have chosen example question (Paper 1).'}
+                  </p>
+                ) : (
+                  <>
+                    {renderFilePreview(questionFile) || <FileText className="mx-auto h-12 w-12 text-muted-foreground/50" />}
+                    <input
+                      type="file"
+                      accept="application/pdf,image/*"
+                      className="hidden"
+                      ref={questionInputRef}
+                      onChange={e => setQuestionFile(e.target.files?.[0] || null)}
+                    />
+                    <Button variant="secondary" className="mt-2" onClick={() => questionInputRef.current?.click()}>
+                      {questionFile ? 'Change File' : 'Choose File'}
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
             {/* Answer Upload */}
             <div className="space-y-3">
               <h3 className="font-semibold text-foreground">Your Answer</h3>
               <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-secondary bg-secondary/5 p-4">
-                {renderFilePreview(answerFile) || <Upload className="mx-auto h-12 w-12 text-muted-foreground/50" />}
-                <input
-                  type="file"
-                  accept="application/pdf,image/*"
-                  className="hidden"
-                  ref={answerInputRef}
-                  onChange={e => setAnswerFile(e.target.files?.[0] || null)}
-                />
-                <Button variant="secondary" className="mt-2" onClick={() => answerInputRef.current?.click()}>
-                  {answerFile ? 'Change File' : 'Choose File'}
-                </Button>
+                {sourceMode === 'example' ? (
+                  <p className="my-4 text-sm text-muted-foreground">
+                    {paperType === 'paper2'
+                      ? 'You have chosen example answer (Paper 2 MC).'
+                      : 'You have chosen example user answer (Paper 1).'}
+                  </p>
+                ) : (
+                  <>
+                    {renderFilePreview(answerFile) || <Upload className="mx-auto h-12 w-12 text-muted-foreground/50" />}
+                    <input
+                      type="file"
+                      accept="application/pdf,image/*"
+                      className="hidden"
+                      ref={answerInputRef}
+                      onChange={e => setAnswerFile(e.target.files?.[0] || null)}
+                    />
+                    <Button variant="secondary" className="mt-2" onClick={() => answerInputRef.current?.click()}>
+                      {answerFile ? 'Change File' : 'Choose File'}
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
             {/* Marking Scheme Upload */}
             <div className="space-y-3">
               <h3 className="font-semibold text-foreground">Marking Scheme</h3>
               <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-secondary bg-secondary/5 p-4">
-                {renderFilePreview(markingSchemeFile) || <CheckCircle className="mx-auto h-12 w-12 text-muted-foreground/50" />}
-                <input
-                  type="file"
-                  accept="application/pdf,image/*"
-                  className="hidden"
-                  ref={markingSchemeInputRef}
-                  onChange={e => setMarkingSchemeFile(e.target.files?.[0] || null)}
-                />
-                <Button variant="secondary" className="mt-2" onClick={() => markingSchemeInputRef.current?.click()}>
-                  {markingSchemeFile ? 'Change File' : 'Choose File'}
-                </Button>
+                {sourceMode === 'example' ? (
+                  <p className="my-4 text-sm text-muted-foreground">
+                    {paperType === 'paper2'
+                      ? 'You have chosen example marking scheme (Paper 2).'
+                      : 'You have chosen example marking scheme (Paper 1).'}
+                  </p>
+                ) : (
+                  <>
+                    {renderFilePreview(markingSchemeFile) || <CheckCircle className="mx-auto h-12 w-12 text-muted-foreground/50" />}
+                    <input
+                      type="file"
+                      accept="application/pdf,image/*"
+                      className="hidden"
+                      ref={markingSchemeInputRef}
+                      onChange={e => setMarkingSchemeFile(e.target.files?.[0] || null)}
+                    />
+                    <Button variant="secondary" className="mt-2" onClick={() => markingSchemeInputRef.current?.click()}>
+                      {markingSchemeFile ? 'Change File' : 'Choose File'}
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -168,7 +249,11 @@ export function PastPapersSection() {
             <Button
               size="lg"
               className="gap-2 bg-secondary text-secondary-foreground hover:bg-secondary/90"
-              disabled={!paperType || !questionFile || !answerFile || !markingSchemeFile || gradingLoading}
+              disabled={
+                !paperType ||
+                gradingLoading ||
+                (sourceMode === 'upload' && (!questionFile || !answerFile || !markingSchemeFile))
+              }
               onClick={handleGrade}
             >
               {gradingLoading ? 'Grading...' : 'Grade My Answer'}
@@ -177,6 +262,46 @@ export function PastPapersSection() {
           </div>
         </CardContent>
       </Card>
+
+      {/* <Card className="border-2 border-border">
+        <CardHeader>
+          <CardTitle className="text-lg font-bold uppercase tracking-wide">Temporary Sample Upload (Local)</CardTitle>
+          <CardDescription>
+            Upload the 5 example files to Supabase storage. Keep this card local if you do not want to push it.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {[
+            { key: 'paper1Question', label: 'Upload here for example question paper1' },
+            { key: 'paper1Answer', label: 'Upload here for example user answer paper1' },
+            { key: 'paper1Marking', label: 'Upload here for example marking scheme paper1' },
+            { key: 'paper2Question', label: 'Upload here for example question paper2' },
+            { key: 'paper2Marking', label: 'Upload here for example marking scheme paper2' },
+          ].map((slot) => (
+            <div key={slot.key} className="rounded border border-border p-3">
+              <p className="mb-2 text-sm font-medium">{slot.label}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="file"
+                  accept="application/pdf,image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null
+                    setSampleFileMap((prev) => ({ ...prev, [slot.key]: file }))
+                  }}
+                />
+                <Button
+                  variant="secondary"
+                  onClick={() => uploadSampleFile(slot.key)}
+                  disabled={!sampleFileMap[slot.key]}
+                >
+                  Upload
+                </Button>
+                <span className="text-xs text-muted-foreground">{sampleUploadStatus[slot.key] || ''}</span>
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card> */}
 
       {/* Step 2: AI Response */}
       <Card className="border-2 border-border">

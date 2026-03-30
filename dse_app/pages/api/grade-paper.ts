@@ -4,6 +4,7 @@ import fs from 'fs'
 import Tesseract from 'tesseract.js'
 import ModelClient, { isUnexpected } from "@azure-rest/ai-inference";
 import { AzureKeyCredential } from "@azure/core-auth";
+import { createClient } from '@supabase/supabase-js'
 
 export const config = {
   api: {
@@ -11,21 +12,139 @@ export const config = {
   },
 }
 
-// Extract text from files using OCR or PDF parsing
-async function extractTextFromFile(filePath: string, mimetype: string): Promise<string> {
+const SAMPLE_BUCKET = process.env.SUPABASE_SAMPLE_BUCKET || 'grading-examples'
+const SAMPLE_PATHS = {
+  paper1Question: 'examples/paper1/question',
+  paper1Answer: 'examples/paper1/answer',
+  paper1Marking: 'examples/paper1/marking',
+  paper2Question: 'examples/paper2/question',
+  paper2Marking: 'examples/paper2/marking',
+} as const
+
+async function extractTextFromBuffer(buffer: Buffer, mimetype: string): Promise<string> {
   if (mimetype === 'application/pdf') {
-    const data = fs.readFileSync(filePath)
     // Dynamically import pdf-parse to avoid ESM/CJS issues
     const pdfParseModule: any = await import('pdf-parse');
     const pdfParse = pdfParseModule.default?.default || pdfParseModule.default || pdfParseModule;
-    console.log('pdfParseModule:', pdfParseModule, 'pdfParse:', pdfParse);
-    const pdfData = await pdfParse(data)
+    const pdfData = await pdfParse(buffer)
     return pdfData.text
   } else if (mimetype.startsWith('image/')) {
-    const { data: { text } } = await Tesseract.recognize(filePath, 'eng+chi_tra')
+    const { data: { text } } = await Tesseract.recognize(buffer, 'eng+chi_tra')
     return text
   }
   return ''
+}
+
+// Extract text from files using OCR or PDF parsing
+async function extractTextFromFile(filePath: string, mimetype: string): Promise<string> {
+  const data = fs.readFileSync(filePath)
+  return await extractTextFromBuffer(data, mimetype)
+}
+
+function getSupabaseServerClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL
+  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error('Missing Supabase server credentials')
+  }
+  return createClient(supabaseUrl, supabaseKey)
+}
+
+async function downloadSampleText(path: string): Promise<string> {
+  const supabase = getSupabaseServerClient()
+  const { data, error } = await supabase.storage.from(SAMPLE_BUCKET).download(path)
+  if (error || !data) {
+    throw new Error(`Failed to download sample file: ${path}`)
+  }
+  const bytes = Buffer.from(await data.arrayBuffer())
+  const mimetype = data.type || 'application/octet-stream'
+  return await extractTextFromBuffer(bytes, mimetype)
+}
+
+async function loadExampleTexts(paperType: string): Promise<{ questionText: string; answerText: string; markingSchemeText: string }> {
+  if (paperType === 'paper2') {
+    const questionText = await downloadSampleText(SAMPLE_PATHS.paper2Question)
+    const markingSchemeText = await downloadSampleText(SAMPLE_PATHS.paper2Marking)
+    // Paper 2 example mode uses fixed MC answer C by design.
+    const answerText = 'C'
+    return { questionText, answerText, markingSchemeText }
+  }
+
+  const questionText = await downloadSampleText(SAMPLE_PATHS.paper1Question)
+  const answerText = await downloadSampleText(SAMPLE_PATHS.paper1Answer)
+  const markingSchemeText = await downloadSampleText(SAMPLE_PATHS.paper1Marking)
+  return { questionText, answerText, markingSchemeText }
+}
+
+type SampleAsset = {
+  mimetype: string
+  isImage: boolean
+  text: string
+  dataUrl: string | null
+}
+
+function detectMimeFromBuffer(buffer: Buffer): string | null {
+  if (buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    return 'image/png'
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return 'image/jpeg'
+  }
+  if (buffer.length >= 6) {
+    const head6 = buffer.subarray(0, 6).toString('ascii')
+    if (head6 === 'GIF87a' || head6 === 'GIF89a') return 'image/gif'
+  }
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WEBP') {
+    return 'image/webp'
+  }
+  return null
+}
+
+async function downloadSampleAsset(path: string): Promise<SampleAsset> {
+  const supabase = getSupabaseServerClient()
+  const { data, error } = await supabase.storage.from(SAMPLE_BUCKET).download(path)
+  if (error || !data) {
+    throw new Error(`Failed to download sample file: ${path}`)
+  }
+  const bytes = Buffer.from(await data.arrayBuffer())
+  const guessedMime = detectMimeFromBuffer(bytes)
+  const mimetype = (data.type && data.type !== 'application/octet-stream') ? data.type : (guessedMime || data.type || 'application/octet-stream')
+  const isImage = mimetype.startsWith('image/')
+
+  if (isImage) {
+    return {
+      mimetype,
+      isImage,
+      text: '',
+      dataUrl: `data:${mimetype};base64,${bytes.toString('base64')}`,
+    }
+  }
+
+  return {
+    mimetype,
+    isImage,
+    text: await extractTextFromBuffer(bytes, mimetype),
+    dataUrl: null,
+  }
+}
+
+async function loadExampleAssets(paperType: string): Promise<{ question: SampleAsset; answer: SampleAsset; marking: SampleAsset }> {
+  if (paperType === 'paper2') {
+    const question = await downloadSampleAsset(SAMPLE_PATHS.paper2Question)
+    const marking = await downloadSampleAsset(SAMPLE_PATHS.paper2Marking)
+    const answer: SampleAsset = {
+      mimetype: 'text/plain',
+      isImage: false,
+      text: 'C',
+      dataUrl: null,
+    }
+    return { question, answer, marking }
+  }
+
+  const question = await downloadSampleAsset(SAMPLE_PATHS.paper1Question)
+  const answer = await downloadSampleAsset(SAMPLE_PATHS.paper1Answer)
+  const marking = await downloadSampleAsset(SAMPLE_PATHS.paper1Marking)
+  return { question, answer, marking }
 }
 
 type GradingQuestion = {
@@ -302,6 +421,10 @@ function shouldRepairPayload(payload: Omit<GradingPayload, 'ocrDebug'>): boolean
 }
 
 function buildGradingPrompt(questionText: string, markingSchemeText: string, answerText: string, ctx: GradeContext): string {
+  const extraRule = ctx.paperType === 'paper2'
+    ? '9) For paper2 MC example mode, treat student answer as a single option. If it matches the marking scheme correct option (e.g. C), award full marks; otherwise award 0.'
+    : '9) For paper1 short/long questions, award method/answer marks according to the scheme breakdown.'
+
   return `You are an expert HKDSE Mathematics marker.
 
 Context:
@@ -319,6 +442,7 @@ Rules:
 6) solution must include concise key steps.
 7) concepts must be non-empty.
 8) Return ONLY valid JSON. No markdown and no extra text.
+${extraRule}
 
 Required JSON shape:
 {
@@ -434,42 +558,79 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     })
 
     const { fields, files } = parsedForm
+    const getField = (f: any) => Array.isArray(f) ? f[0] : f
+    const sourceMode = String(getField(fields.sourceMode) || 'upload')
+    const useExample = sourceMode === 'example'
     // Handle case where files are arrays (Formidable v2+)
     const getFirst = (f: any) => Array.isArray(f) ? f[0] : f
     const questionFile = getFirst(files.question)
     const answerFile = getFirst(files.answer)
     const markingSchemeFile = getFirst(files.markingScheme)
-    const getField = (f: any) => Array.isArray(f) ? f[0] : f
     const gradeContext: GradeContext = {
       year: String(getField(fields.year) || ''),
       paper: String(getField(fields.paper) || ''),
       paperType: String(getField(fields.paperType) || ''),
     }
 
-    // Use correct file path property (filepath or path)
-    const getFilePath = (file: any) => file.filepath || file.path
-    if (!getFilePath(questionFile) || !getFilePath(answerFile) || !getFilePath(markingSchemeFile)) {
-      res.status(400).json({ error: 'File upload failed: missing file path', debug: { questionFile, answerFile, markingSchemeFile } })
+    if (!gradeContext.paperType) {
+      res.status(400).json({ error: 'Missing paperType' })
       return
     }
-    const questionMimetype = questionFile.mimetype || ''
-    const answerMimetype = answerFile.mimetype || ''
-    const markingSchemeMimetype = markingSchemeFile.mimetype || ''
 
-    const areAllImages =
-      questionMimetype.startsWith('image/') &&
-      answerMimetype.startsWith('image/') &&
-      markingSchemeMimetype.startsWith('image/')
+    // Use correct file path property (filepath or path)
+    const getFilePath = (file: any) => file?.filepath || file?.path
+    const questionMimetype = questionFile?.mimetype || ''
+    const answerMimetype = answerFile?.mimetype || ''
+    const markingSchemeMimetype = markingSchemeFile?.mimetype || ''
 
+    let areAllImages = false
+    let useVisionPath = false
     let questionText = ''
     let answerText = ''
     let markingSchemeText = ''
+    let exampleVisionContent: any[] | null = null
 
-    if (!areAllImages) {
-      // Text path for PDF/mixed uploads.
-      questionText = await extractTextFromFile(getFilePath(questionFile), questionMimetype)
-      answerText = await extractTextFromFile(getFilePath(answerFile), answerMimetype)
-      markingSchemeText = await extractTextFromFile(getFilePath(markingSchemeFile), markingSchemeMimetype)
+    if (useExample) {
+      const exampleAssets = await loadExampleAssets(gradeContext.paperType)
+      questionText = exampleAssets.question.text
+      answerText = exampleAssets.answer.text
+      markingSchemeText = exampleAssets.marking.text
+
+      if (exampleAssets.question.isImage && exampleAssets.marking.isImage) {
+        if (gradeContext.paperType === 'paper2') {
+          useVisionPath = true
+          exampleVisionContent = [
+            { type: 'text', text: `${buildVisionGradingPrompt(gradeContext)}\n\nFor paper2 example mode, student answer is fixed to option C.` },
+            { type: 'image_url', image_url: { url: exampleAssets.question.dataUrl } },
+            { type: 'image_url', image_url: { url: exampleAssets.marking.dataUrl } },
+          ]
+        } else if (exampleAssets.answer.isImage) {
+          useVisionPath = true
+          exampleVisionContent = [
+            { type: 'text', text: buildVisionGradingPrompt(gradeContext) },
+            { type: 'image_url', image_url: { url: exampleAssets.question.dataUrl } },
+            { type: 'image_url', image_url: { url: exampleAssets.answer.dataUrl } },
+            { type: 'image_url', image_url: { url: exampleAssets.marking.dataUrl } },
+          ]
+        }
+      }
+    } else {
+      if (!getFilePath(questionFile) || !getFilePath(answerFile) || !getFilePath(markingSchemeFile)) {
+        res.status(400).json({ error: 'File upload failed: missing file path', debug: { questionFile, answerFile, markingSchemeFile } })
+        return
+      }
+
+      areAllImages =
+        questionMimetype.startsWith('image/') &&
+        answerMimetype.startsWith('image/') &&
+        markingSchemeMimetype.startsWith('image/')
+
+      if (!areAllImages) {
+        // Text path for PDF/mixed uploads.
+        questionText = await extractTextFromFile(getFilePath(questionFile), questionMimetype)
+        answerText = await extractTextFromFile(getFilePath(answerFile), answerMimetype)
+        markingSchemeText = await extractTextFromFile(getFilePath(markingSchemeFile), markingSchemeMimetype)
+      }
     }
 
     const normalizedQuestionText = normalizeExtractedText(questionText)
@@ -477,7 +638,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const normalizedMarkingSchemeText = normalizeExtractedText(markingSchemeText)
 
     // Stop early when text extraction path fails to produce meaningful text.
-    if (!areAllImages && (
+    if (!useVisionPath && !areAllImages && (
       normalizedQuestionText.length < 10 ||
       normalizedAnswerText.length < 10 ||
       normalizedMarkingSchemeText.length < 10
@@ -505,14 +666,16 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     const client = ModelClient(endpoint, new AzureKeyCredential(token));
 
-    const firstUserContent: any = areAllImages
+    const firstUserContent: any = useVisionPath
+      ? exampleVisionContent
+      : ((!useExample && areAllImages)
       ? [
           { type: 'text', text: buildVisionGradingPrompt(gradeContext) },
           { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(questionFile), questionMimetype) } },
           { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(answerFile), answerMimetype) } },
           { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(markingSchemeFile), markingSchemeMimetype) } },
         ]
-      : buildGradingPrompt(questionText, markingSchemeText, answerText, gradeContext)
+      : buildGradingPrompt(questionText, markingSchemeText, answerText, gradeContext))
 
     const response = await postChatWithModelFallback(
       client,
@@ -532,16 +695,21 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const rawContent = normalizeModelContent(response.body?.choices?.[0]?.message?.content)
     let parsed = parseGradingPayload(rawContent)
 
-    if (!areAllImages && shouldRepairPayload(parsed)) {
+    if (shouldRepairPayload(parsed) && gradeContext.paperType !== 'paper2') {
       const repairPrompt = buildRepairPrompt(questionText, markingSchemeText, answerText, rawContent, gradeContext)
-      const repairUserContent: any = areAllImages
+      const repairUserContent: any = useVisionPath
+        ? [
+            { type: 'text', text: `${buildVisionGradingPrompt(gradeContext)}\n\nPrevious incomplete output:\n${rawContent}` },
+            ...(exampleVisionContent || []).filter((item) => item?.type === 'image_url'),
+          ]
+        : ((!useExample && areAllImages)
         ? [
             { type: 'text', text: `${buildVisionGradingPrompt(gradeContext)}\n\nPrevious incomplete output:\n${rawContent}` },
             { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(questionFile), questionMimetype) } },
             { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(answerFile), answerMimetype) } },
             { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(markingSchemeFile), markingSchemeMimetype) } },
           ]
-        : repairPrompt
+        : repairPrompt)
 
       const repairResponse = await postChatWithModelFallback(
         client,
