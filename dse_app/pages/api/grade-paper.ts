@@ -22,7 +22,7 @@ async function extractTextFromFile(filePath: string, mimetype: string): Promise<
     const pdfData = await pdfParse(data)
     return pdfData.text
   } else if (mimetype.startsWith('image/')) {
-    const { data: { text } } = await Tesseract.recognize(filePath, 'eng')
+    const { data: { text } } = await Tesseract.recognize(filePath, 'eng+chi_tra')
     return text
   }
   return ''
@@ -52,6 +52,52 @@ type GradeContext = {
   year: string
   paper: string
   paperType: string
+}
+
+function normalizeExtractedText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+const MODEL_TIMEOUT_MS = 90000
+const MAX_COMPLETION_TOKENS = 1200
+const PRIMARY_MODEL = "openai/gpt-5"
+const FALLBACK_MODEL = "openai/gpt-4.1-mini"
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('timed out')
+}
+
+async function postChatWithTimeout(client: any, body: any, timeoutMs: number) {
+  return await Promise.race([
+    client.path("/chat/completions").post({ body }),
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`Model request timed out after ${timeoutMs}ms`)), timeoutMs)
+    }),
+  ])
+}
+
+async function postChatWithModelFallback(client: any, baseBody: any) {
+  try {
+    return await postChatWithTimeout(
+      client,
+      { ...baseBody, model: PRIMARY_MODEL },
+      MODEL_TIMEOUT_MS
+    )
+  } catch (e) {
+    if (!isTimeoutError(e)) throw e
+    console.warn(`Primary model timeout (${PRIMARY_MODEL}), retrying with fallback model (${FALLBACK_MODEL})`)
+    return await postChatWithTimeout(
+      client,
+      { ...baseBody, model: FALLBACK_MODEL },
+      MODEL_TIMEOUT_MS
+    )
+  }
+}
+
+function fileToDataUrl(filePath: string, mimetype: string): string {
+  const bytes = fs.readFileSync(filePath)
+  const base64 = bytes.toString('base64')
+  return `data:${mimetype};base64,${base64}`
 }
 
 function normalizeModelContent(content: any): string {
@@ -155,7 +201,7 @@ function parseGradingPayload(rawText: string): Omit<GradingPayload, 'ocrDebug'> 
   try {
     const parsed = JSON.parse(repairedJsonCandidate)
     const perQuestionSource = Array.isArray(parsed?.perQuestion) ? parsed.perQuestion : []
-    const perQuestion: GradingQuestion[] = perQuestionSource.map((q: any, idx: number) => ({
+    const fromArray: GradingQuestion[] = perQuestionSource.map((q: any, idx: number) => ({
       q: Number.isFinite(Number(q?.q)) ? Number(q.q) : idx + 1,
       score: Number.isFinite(Number(q?.score)) ? Number(q.score) : 0,
       total: Number.isFinite(Number(q?.total)) ? Number(q.total) : 0,
@@ -164,6 +210,21 @@ function parseGradingPayload(rawText: string): Omit<GradingPayload, 'ocrDebug'> 
       concepts: typeof q?.concepts === 'string' ? q.concepts : '',
     }))
 
+    // Single-question mode: allow either flat object or perQuestion array from model.
+    const singleFromFlat: GradingQuestion = {
+      q: Number.isFinite(Number(parsed?.q)) ? Number(parsed.q) : 1,
+      score: Number.isFinite(Number(parsed?.score)) ? Number(parsed.score) : 0,
+      total: Number.isFinite(Number(parsed?.total)) ? Number(parsed.total) : 0,
+      feedback: typeof parsed?.feedback === 'string' ? parsed.feedback : '',
+      solution: typeof parsed?.solution === 'string' ? parsed.solution : '',
+      concepts: typeof parsed?.concepts === 'string' ? parsed.concepts : '',
+    }
+
+    const selected = fromArray.length > 0
+      ? fromArray[0]
+      : (singleFromFlat.feedback || singleFromFlat.solution || singleFromFlat.total > 0 ? singleFromFlat : null)
+
+    const perQuestion = selected ? [selected] : []
     const autoScore = perQuestion.reduce((sum, q) => sum + q.score, 0)
     const autoTotal = perQuestion.reduce((sum, q) => sum + q.total, 0)
 
@@ -175,14 +236,13 @@ function parseGradingPayload(rawText: string): Omit<GradingPayload, 'ocrDebug'> 
     }
   } catch {
     const recoveredQuestions = extractQuestionObjects(repairedJsonCandidate)
-    const recoveredScore = recoveredQuestions.reduce((sum, q) => sum + q.score, 0)
-    const recoveredTotal = recoveredQuestions.reduce((sum, q) => sum + q.total, 0)
+    const firstRecovered = recoveredQuestions[0]
 
-    if (recoveredQuestions.length > 0) {
+    if (firstRecovered) {
       return {
-        score: recoveredScore,
-        total: recoveredTotal,
-        perQuestion: recoveredQuestions,
+        score: firstRecovered.score,
+        total: firstRecovered.total,
+        perQuestion: [firstRecovered],
         rawResult: rawText,
       }
     }
@@ -197,53 +257,48 @@ function parseGradingPayload(rawText: string): Omit<GradingPayload, 'ocrDebug'> 
 }
 
 function normalizeGradingPayload(payload: Omit<GradingPayload, 'ocrDebug'>): Omit<GradingPayload, 'ocrDebug'> {
-  const normalizedQuestions = payload.perQuestion
-    .map((q, idx) => {
-      const total = Number.isFinite(q.total) && q.total > 0 ? q.total : 0
-      const feedback = (q.feedback || '').trim()
-      let score = Number.isFinite(q.score) && q.score >= 0 ? q.score : 0
+  const first = payload.perQuestion[0]
+  if (!first) {
+    return {
+      score: 0,
+      total: 0,
+      perQuestion: [],
+      rawResult: payload.rawResult,
+    }
+  }
 
-      // If model says "correct" but omits score, award full marks for that question.
-      if (score === 0 && total > 0 && /^correct\b/i.test(feedback)) {
-        score = total
-      }
+  const total = Number.isFinite(first.total) && first.total > 0 ? first.total : 0
+  const feedback = (first.feedback || '').trim()
+  let score = Number.isFinite(first.score) && first.score >= 0 ? first.score : 0
 
-      return {
-        q: Number.isFinite(q.q) && q.q > 0 ? q.q : idx + 1,
-        score: Math.min(score, total || score),
-        total,
-        feedback,
-        solution: (q.solution || '').trim(),
-        concepts: (q.concepts || '').trim() || 'Refer to the model solution and marking points for key concepts.',
-      }
-    })
-    .sort((a, b) => a.q - b.q)
+  // If model says "correct" but omits score, award full marks for that question.
+  if (score === 0 && total > 0 && /^correct\b/i.test(feedback)) {
+    score = total
+  }
 
-  const sumScore = normalizedQuestions.reduce((sum, q) => sum + q.score, 0)
-  const sumTotal = normalizedQuestions.reduce((sum, q) => sum + q.total, 0)
+  const normalizedQuestion: GradingQuestion = {
+    q: Number.isFinite(first.q) && first.q > 0 ? first.q : 1,
+    score: Math.min(score, total || score),
+    total,
+    feedback,
+    solution: (first.solution || '').trim(),
+    concepts: (first.concepts || '').trim() || 'Refer to the model solution and marking points for key concepts.',
+  }
 
   return {
-    score: sumScore,
-    total: sumTotal,
-    perQuestion: normalizedQuestions,
+    score: normalizedQuestion.score,
+    total: normalizedQuestion.total,
+    perQuestion: [normalizedQuestion],
     rawResult: payload.rawResult,
   }
 }
 
 function shouldRepairPayload(payload: Omit<GradingPayload, 'ocrDebug'>): boolean {
-  if (!payload.perQuestion.length) return true
-  const missingSolutionCount = payload.perQuestion.filter((q) => !q.solution?.trim()).length
-  const zeroTotalCount = payload.perQuestion.filter((q) => !(q.total > 0)).length
-  const mostlyOneWordFeedback = payload.perQuestion.filter((q) => {
-    const f = (q.feedback || '').trim()
-    return !!f && f.split(/\s+/).length <= 2
-  }).length
-
-  return (
-    missingSolutionCount / payload.perQuestion.length > 0.6 ||
-    zeroTotalCount === payload.perQuestion.length ||
-    mostlyOneWordFeedback / payload.perQuestion.length > 0.7
-  )
+  const q = payload.perQuestion[0]
+  if (!q) return true
+  const feedback = (q.feedback || '').trim()
+  const solution = (q.solution || '').trim()
+  return !(q.total > 0) || !feedback || !solution || feedback.split(/\s+/).length <= 2
 }
 
 function buildGradingPrompt(questionText: string, markingSchemeText: string, answerText: string, ctx: GradeContext): string {
@@ -255,30 +310,24 @@ Context:
 - Paper Type: ${ctx.paperType || 'unknown'}
 
 Rules:
-1) Grade ALL questions that appear in the marking scheme (all sections, not only one section).
-2) Use mark allocation from the marking scheme for each question.
-3) For each question, provide short but useful feedback and a concise model solution.
-4) score must be in [0, total].
-5) total (top level) must equal sum(perQuestion[].total).
-6) score (top level) must equal sum(perQuestion[].score).
-7) Numeric fields must be plain numbers only (do NOT output expressions like 35+35).
-8) concepts must be non-empty for every question.
-9) Return ONLY valid JSON. No markdown and no extra text.
+1) This is single-question grading mode: grade the uploaded question.
+2) Use mark allocation from the uploaded marking scheme for this question.
+3) For marking schemes, the 1A means 1 mark for answer, 1M means 1 mark for method. If only A for that question or part, just award full marks if the answer is correct. If only M, award marks for method even if the final answer is wrong and method is correct.
+3) score must be in [0, total].
+4) Numeric fields must be plain numbers only (do NOT output expressions like 35+35).
+5) feedback must explain why marks are awarded/deducted.
+6) solution must include concise key steps.
+7) concepts must be non-empty.
+8) Return ONLY valid JSON. No markdown and no extra text.
 
 Required JSON shape:
 {
+  "q": number,
   "score": number,
   "total": number,
-  "perQuestion": [
-    {
-      "q": number,
-      "score": number,
-      "total": number,
-      "feedback": string,
-      "solution": string,
-      "concepts": string
-    }
-  ]
+  "feedback": string,
+  "solution": string,
+  "concepts": string
 }
 
 Question Paper:
@@ -289,6 +338,39 @@ ${markingSchemeText}
 
 Student Answer:
 ${answerText}`
+}
+
+function buildVisionGradingPrompt(ctx: GradeContext): string {
+  return `You are an expert HKDSE Mathematics marker.
+
+Context:
+- Year: ${ctx.year || 'unknown'}
+- Paper Type: ${ctx.paperType || 'unknown'}
+
+You will receive 3 images in this order:
+1) Question image
+2) Student answer image
+3) Marking scheme image
+
+Rules:
+1) This is single-question grading mode.
+2) Use mark allocation from the marking scheme for this question.
+3) score must be in [0, total].
+4) Numeric fields must be plain numbers only.
+5) feedback must explain why marks are awarded/deducted.
+6) solution must include concise key steps.
+7) concepts must be non-empty.
+8) Return ONLY valid JSON. No markdown and no extra text.
+
+Required JSON shape:
+{
+  "q": number,
+  "score": number,
+  "total": number,
+  "feedback": string,
+  "solution": string,
+  "concepts": string
+}`
 }
 
 function buildRepairPrompt(
@@ -308,18 +390,12 @@ Context:
 You must re-grade and regenerate complete JSON for ALL questions in the marking scheme.
 Strictly return ONLY valid JSON with this shape:
 {
+  "q": number,
   "score": number,
   "total": number,
-  "perQuestion": [
-    {
-      "q": number,
-      "score": number,
-      "total": number,
-      "feedback": string,
-      "solution": string,
-      "concepts": string
-    }
-  ]
+  "feedback": string,
+  "solution": string,
+  "concepts": string
 }
 
 Constraints:
@@ -327,7 +403,7 @@ Constraints:
 - solution must explain the key steps for each question.
 - concepts must be non-empty for each question.
 - numeric fields must be plain numbers only (no expressions).
-- total and score at top level must equal sums from perQuestion.
+- Grade only the uploaded single question.
 
 Question Paper:
 ${questionText}
@@ -345,101 +421,165 @@ ${previousRawResult}`
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end()
 
-  const form = new IncomingForm({ multiples: false })
-  form.parse(req, async (err: any, fields: any, files: any) => {
-    if (err) return res.status(500).json({ error: 'File upload error' })
-    try {
-      // Handle case where files are arrays (Formidable v2+)
-      const getFirst = (f: any) => Array.isArray(f) ? f[0] : f
-      const questionFile = getFirst(files.question)
-      const answerFile = getFirst(files.answer)
-      const markingSchemeFile = getFirst(files.markingScheme)
-      const getField = (f: any) => Array.isArray(f) ? f[0] : f
-      const gradeContext: GradeContext = {
-        year: String(getField(fields.year) || ''),
-        paper: String(getField(fields.paper) || ''),
-        paperType: String(getField(fields.paperType) || ''),
-      }
-      // Debug log file objects to check structure
-      console.log('questionFile:', questionFile)
-      console.log('answerFile:', answerFile)
-      console.log('markingSchemeFile:', markingSchemeFile)
-      // Use correct file path property (filepath or path)
-      const getFilePath = (file: any) => file.filepath || file.path
-      if (!getFilePath(questionFile) || !getFilePath(answerFile) || !getFilePath(markingSchemeFile)) {
-        res.status(400).json({ error: 'File upload failed: missing file path', debug: { questionFile, answerFile, markingSchemeFile } })
-        return
-      }
-      // === Extract text from files ===
-      const questionText = await extractTextFromFile(getFilePath(questionFile), questionFile.mimetype || '')
-      const answerText = await extractTextFromFile(getFilePath(answerFile), answerFile.mimetype || '')
-      const markingSchemeText = await extractTextFromFile(getFilePath(markingSchemeFile), markingSchemeFile.mimetype || '')
-      // === Compose prompt for Llama 4 ===
-      const prompt = buildGradingPrompt(questionText, markingSchemeText, answerText, gradeContext)
-      const endpoint = "https://models.github.ai/inference";
-      const model = "meta/Llama-4-Scout-17B-16E-Instruct";
-      const token = process.env.GITHUB_MODEL_API_KEY_gpt5;
-      if (!token) {
-        res.status(500).json({ error: 'Missing GITHUB_MODEL_API_KEY_gpt5 environment variable' });
-        return;
-      }
-      const client = ModelClient(endpoint, new AzureKeyCredential(token));
-      const response = await client.path("/chat/completions").post({
-        body: {
-          messages: [
-            { role: "system", content: "You are an expert DSE Mathematics marker." },
-            { role: "user", content: prompt }
-          ],
-          temperature: 0.2,
-          top_p: 0.9,
-          max_tokens: 4096,
-          model: model
+  try {
+    const form = new IncomingForm({ multiples: false })
+    const parsedForm = await new Promise<{ fields: any; files: any }>((resolve, reject) => {
+      form.parse(req, (err: any, fields: any, files: any) => {
+        if (err) {
+          reject(err)
+          return
         }
-      });
-      if (isUnexpected(response)) {
-        console.error('GitHub Model API error:', response.body.error);
-        res.status(502).json({ error: 'GitHub Model API error', details: response.body.error });
-        return;
-      }
-      const rawContent = normalizeModelContent(response.body?.choices?.[0]?.message?.content)
-      let parsed = parseGradingPayload(rawContent)
+        resolve({ fields, files })
+      })
+    })
 
-      if (shouldRepairPayload(parsed)) {
-        const repairPrompt = buildRepairPrompt(questionText, markingSchemeText, answerText, rawContent, gradeContext)
-        const repairResponse = await client.path("/chat/completions").post({
-          body: {
-            messages: [
-              { role: "system", content: "You are an expert DSE Mathematics marker." },
-              { role: "user", content: repairPrompt }
-            ],
-            temperature: 0.2,
-            top_p: 0.9,
-            max_tokens: 4096,
-            model: model
-          }
-        })
+    const { fields, files } = parsedForm
+    // Handle case where files are arrays (Formidable v2+)
+    const getFirst = (f: any) => Array.isArray(f) ? f[0] : f
+    const questionFile = getFirst(files.question)
+    const answerFile = getFirst(files.answer)
+    const markingSchemeFile = getFirst(files.markingScheme)
+    const getField = (f: any) => Array.isArray(f) ? f[0] : f
+    const gradeContext: GradeContext = {
+      year: String(getField(fields.year) || ''),
+      paper: String(getField(fields.paper) || ''),
+      paperType: String(getField(fields.paperType) || ''),
+    }
 
-        if (!isUnexpected(repairResponse)) {
-          const repairedRaw = normalizeModelContent(repairResponse.body?.choices?.[0]?.message?.content)
-          parsed = parseGradingPayload(repairedRaw)
-        }
-      }
+    // Use correct file path property (filepath or path)
+    const getFilePath = (file: any) => file.filepath || file.path
+    if (!getFilePath(questionFile) || !getFilePath(answerFile) || !getFilePath(markingSchemeFile)) {
+      res.status(400).json({ error: 'File upload failed: missing file path', debug: { questionFile, answerFile, markingSchemeFile } })
+      return
+    }
+    const questionMimetype = questionFile.mimetype || ''
+    const answerMimetype = answerFile.mimetype || ''
+    const markingSchemeMimetype = markingSchemeFile.mimetype || ''
 
-      const normalized = normalizeGradingPayload(parsed)
-      const payload: GradingPayload = {
-        ...normalized,
+    const areAllImages =
+      questionMimetype.startsWith('image/') &&
+      answerMimetype.startsWith('image/') &&
+      markingSchemeMimetype.startsWith('image/')
+
+    let questionText = ''
+    let answerText = ''
+    let markingSchemeText = ''
+
+    if (!areAllImages) {
+      // Text path for PDF/mixed uploads.
+      questionText = await extractTextFromFile(getFilePath(questionFile), questionMimetype)
+      answerText = await extractTextFromFile(getFilePath(answerFile), answerMimetype)
+      markingSchemeText = await extractTextFromFile(getFilePath(markingSchemeFile), markingSchemeMimetype)
+    }
+
+    const normalizedQuestionText = normalizeExtractedText(questionText)
+    const normalizedAnswerText = normalizeExtractedText(answerText)
+    const normalizedMarkingSchemeText = normalizeExtractedText(markingSchemeText)
+
+    // Stop early when text extraction path fails to produce meaningful text.
+    if (!areAllImages && (
+      normalizedQuestionText.length < 10 ||
+      normalizedAnswerText.length < 10 ||
+      normalizedMarkingSchemeText.length < 10
+    )) {
+      res.status(422).json({
+        error: 'Unable to read enough text from uploaded files. Please upload clearer images or PDFs (higher resolution).',
+        details: {
+          questionTextLength: normalizedQuestionText.length,
+          answerTextLength: normalizedAnswerText.length,
+          markingSchemeTextLength: normalizedMarkingSchemeText.length,
+        },
         ocrDebug: {
           markingSchemeText,
           answerText,
         },
-      }
+      })
+      return
+    }
 
-      res.json(payload);
-    } catch (e) {
-      console.error('Grade paper API error:', e)
+    const endpoint = "https://models.github.ai/inference";
+    const token = process.env.GITHUB_MODEL_API_KEY_gpt5;
+    if (!token) {
+      res.status(500).json({ error: 'Missing GITHUB_MODEL_API_KEY_gpt5 environment variable' });
+      return;
+    }
+    const client = ModelClient(endpoint, new AzureKeyCredential(token));
+
+    const firstUserContent: any = areAllImages
+      ? [
+          { type: 'text', text: buildVisionGradingPrompt(gradeContext) },
+          { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(questionFile), questionMimetype) } },
+          { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(answerFile), answerMimetype) } },
+          { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(markingSchemeFile), markingSchemeMimetype) } },
+        ]
+      : buildGradingPrompt(questionText, markingSchemeText, answerText, gradeContext)
+
+    const response = await postChatWithModelFallback(
+      client,
+      {
+        messages: [
+          { role: "system", content: "You are an expert DSE Mathematics marker." },
+          { role: "user", content: firstUserContent }
+        ],
+        max_completion_tokens: MAX_COMPLETION_TOKENS,
+      } as any
+    ) as any;
+    if (isUnexpected(response)) {
+      console.error('GitHub Model API error:', response.body.error);
+      res.status(502).json({ error: 'GitHub Model API error', details: response.body.error });
+      return;
+    }
+    const rawContent = normalizeModelContent(response.body?.choices?.[0]?.message?.content)
+    let parsed = parseGradingPayload(rawContent)
+
+    if (!areAllImages && shouldRepairPayload(parsed)) {
+      const repairPrompt = buildRepairPrompt(questionText, markingSchemeText, answerText, rawContent, gradeContext)
+      const repairUserContent: any = areAllImages
+        ? [
+            { type: 'text', text: `${buildVisionGradingPrompt(gradeContext)}\n\nPrevious incomplete output:\n${rawContent}` },
+            { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(questionFile), questionMimetype) } },
+            { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(answerFile), answerMimetype) } },
+            { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(markingSchemeFile), markingSchemeMimetype) } },
+          ]
+        : repairPrompt
+
+      const repairResponse = await postChatWithModelFallback(
+        client,
+        {
+          messages: [
+            { role: "system", content: "You are an expert DSE Mathematics marker." },
+            { role: "user", content: repairUserContent }
+          ],
+          max_completion_tokens: MAX_COMPLETION_TOKENS,
+        } as any
+      ) as any
+
+      if (!isUnexpected(repairResponse)) {
+        const repairedRaw = normalizeModelContent(repairResponse.body?.choices?.[0]?.message?.content)
+        parsed = parseGradingPayload(repairedRaw)
+      }
+    }
+
+    const normalized = normalizeGradingPayload(parsed)
+    const payload: GradingPayload = {
+      ...normalized,
+      ocrDebug: {
+        markingSchemeText,
+        answerText,
+      },
+    }
+
+    res.json(payload);
+  } catch (e) {
+    console.error('Grade paper API error:', e)
+    if (!res.headersSent) {
+      if (e instanceof Error && e.message.includes('timed out')) {
+        res.status(504).json({ error: 'Model request timeout. Please try again.' })
+        return
+      }
       res.status(500).json({ error: 'Processing error', details: e instanceof Error ? e.message : e })
     }
-  })
+  }
 }
 
 export default handler

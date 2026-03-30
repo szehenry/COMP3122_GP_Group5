@@ -12,7 +12,6 @@ export function PastPapersSection() {
   const [markingSchemeFile, setMarkingSchemeFile] = useState<File | null>(null)
   const [gradingResult, setGradingResult] = useState<any>(null)
   const [gradingLoading, setGradingLoading] = useState(false)
-  const [selectedResultQuestion, setSelectedResultQuestion] = useState<number>(1)
   const [paperType, setPaperType] = useState<string>("")
 
   // File input refs
@@ -36,21 +35,44 @@ export function PastPapersSection() {
   const handleGrade = async () => {
     if (!questionFile || !answerFile || !markingSchemeFile || !paperType) return
     setGradingLoading(true)
-    const formData = new FormData()
-    formData.append('question', questionFile)
-    formData.append('answer', answerFile)
-    formData.append('markingScheme', markingSchemeFile)
-    formData.append('paperType', paperType)
-    // TODO: Add user_id if available
-    const res = await fetch('/api/grade-paper', {
-      method: 'POST',
-      body: formData,
-    })
-    const data = await res.json()
-    setGradingResult(data)
-    setGradingLoading(false)
-    setSelectedResultQuestion(1)
+    try {
+      const formData = new FormData()
+      formData.append('question', questionFile)
+      formData.append('answer', answerFile)
+      formData.append('markingScheme', markingSchemeFile)
+      formData.append('paperType', paperType)
+      // TODO: Add user_id if available
+      const res = await fetch('/api/grade-paper', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const rawText = await res.text()
+      if (!rawText.trim()) {
+        throw new Error('Empty response body from /api/grade-paper')
+      }
+
+      let data: any
+      try {
+        data = JSON.parse(rawText)
+      } catch {
+        throw new Error('Invalid JSON response from /api/grade-paper')
+      }
+
+      if (!res.ok) {
+        throw new Error(data?.error || `Request failed with status ${res.status}`)
+      }
+
+      setGradingResult(data)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to grade answer'
+      setGradingResult({ error: message, perQuestion: [] })
+    } finally {
+      setGradingLoading(false)
+    }
   }
+
+  const activeResult = gradingResult?.perQuestion?.[0]
 
   return (
     <div className="space-y-6">
@@ -176,9 +198,14 @@ export function PastPapersSection() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {gradingResult?.error && (
+            <div className="mb-4 rounded border border-red-400 bg-red-50 p-4 text-red-700">
+              <strong>Grading failed.</strong> {gradingResult.error}
+            </div>
+          )}
           {gradingResult && gradingResult.perQuestion && gradingResult.perQuestion.length === 0 && (
             <div className="mb-4 p-4 border border-red-400 bg-red-50 text-red-700 rounded">
-              <strong>No questions detected.</strong> Please check your marking scheme file or try a clearer scan.<br/>
+              <strong>No grading result detected.</strong> Please check your uploaded files or try a clearer scan.<br/>
               <details className="mt-2">
                 <summary className="cursor-pointer">Show OCR Debug Info</summary>
                 <pre className="text-xs overflow-x-auto bg-gray-100 p-2 mt-2 rounded">
@@ -190,18 +217,7 @@ export function PastPapersSection() {
           {gradingResult ? (
             gradingResult.perQuestion && gradingResult.perQuestion.length > 0 ? (
               <div>
-                <div className="mb-4 flex items-center gap-2">
-                  <label className="font-medium">Select Question:</label>
-                  <select
-                    className="border rounded px-2 py-1"
-                    value={selectedResultQuestion}
-                    onChange={e => setSelectedResultQuestion(Number(e.target.value))}
-                  >
-                    {gradingResult.perQuestion.map((q: any, idx: number) => (
-                      <option key={q.q} value={q.q}>Question {q.q}</option>
-                    ))}
-                  </select>
-                </div>
+                <p className="mb-4 text-sm font-medium text-foreground">Current uploaded question result</p>
                 <Tabs defaultValue="feedback" className="w-full">
                   <TabsList className="mb-4 grid w-full grid-cols-3 lg:w-auto lg:inline-flex">
                     <TabsTrigger value="feedback">Feedback</TabsTrigger>
@@ -212,7 +228,7 @@ export function PastPapersSection() {
                     <div className="rounded-xl border-2 border-dashed border-border bg-muted/30 p-8 text-center">
                       <MessageSquare className="mx-auto h-12 w-12 text-muted-foreground/50" />
                       <p className="mt-3 text-muted-foreground">
-                        {gradingResult.perQuestion.find((q: any) => q.q === selectedResultQuestion)?.feedback || 'No feedback.'}
+                        {activeResult?.feedback || 'No feedback.'}
                       </p>
                     </div>
                   </TabsContent>
@@ -220,7 +236,7 @@ export function PastPapersSection() {
                     <div className="rounded-xl border-2 border-dashed border-border bg-muted/30 p-8 text-center">
                       <FileText className="mx-auto h-12 w-12 text-muted-foreground/50" />
                       <p className="mt-3 text-muted-foreground">
-                        {gradingResult.perQuestion.find((q: any) => q.q === selectedResultQuestion)?.solution
+                        {activeResult?.solution
                           || 'No solution available from AI output.'}
                       </p>
                     </div>
@@ -229,7 +245,7 @@ export function PastPapersSection() {
                     <div className="rounded-xl border-2 border-dashed border-border bg-muted/30 p-8 text-center">
                       <CheckCircle className="mx-auto h-12 w-12 text-muted-foreground/50" />
                       <p className="mt-3 text-muted-foreground">
-                        {gradingResult.perQuestion.find((q: any) => q.q === selectedResultQuestion)?.concepts
+                        {activeResult?.concepts
                           || 'Key concepts were not returned for this question.'}
                       </p>
                     </div>
