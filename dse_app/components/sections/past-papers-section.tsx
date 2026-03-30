@@ -3,14 +3,10 @@
 import { useState, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Upload, FileText, CheckCircle, MessageSquare, ChevronRight, Loader2 } from "lucide-react"
 
 export function PastPapersSection() {
-  const [selectedYear, setSelectedYear] = useState<string>("")
-  const [selectedPaper, setSelectedPaper] = useState<string>("")
-  const [selectedQuestion, setSelectedQuestion] = useState<string>("")
   const [questionFile, setQuestionFile] = useState<File | null>(null)
   const [answerFile, setAnswerFile] = useState<File | null>(null)
   const [markingSchemeFile, setMarkingSchemeFile] = useState<File | null>(null)
@@ -44,8 +40,6 @@ export function PastPapersSection() {
     formData.append('question', questionFile)
     formData.append('answer', answerFile)
     formData.append('markingScheme', markingSchemeFile)
-    formData.append('year', selectedYear)
-    formData.append('paper', selectedPaper)
     formData.append('paperType', paperType)
     // TODO: Add user_id if available
     const res = await fetch('/api/grade-paper', {
@@ -68,16 +62,18 @@ export function PastPapersSection() {
         </p>
       </div>
 
-      {/* Step 1: Select Paper */}
+      {/* Step 1: Upload */}
       <Card className="border-2 border-border">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg font-bold uppercase tracking-wide">
             <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-primary-foreground">
               1
             </span>
-            Select Past Paper
+            Upload Files (By question)
           </CardTitle>
-          <CardDescription>Choose the DSE Mathematics past paper you want to grade</CardDescription>
+          <CardDescription>
+            Upload the question paper, your answer, and the marking scheme (PDF only for marking scheme)
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="mb-4">
@@ -93,67 +89,6 @@ export function PastPapersSection() {
               <option value="paper2">Paper 2 (MC Questions)</option>
             </select>
           </div>
-          <div className="grid gap-4 md:grid-cols-3">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Year</label>
-              <Select value={selectedYear} onValueChange={setSelectedYear}>
-                <SelectTrigger className="border-2 border-border">
-                  <SelectValue placeholder="Select year" />
-                </SelectTrigger>
-                <SelectContent>
-                  {[2024, 2023, 2022, 2021, 2020, 2019, 2018].map((year) => (
-                    <SelectItem key={year} value={year.toString()}>
-                      {year} DSE
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Paper</label>
-              <Select value={selectedPaper} onValueChange={setSelectedPaper}>
-                <SelectTrigger className="border-2 border-border">
-                  <SelectValue placeholder="Select paper" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="paper1">Paper 1 (Conventional)</SelectItem>
-                  <SelectItem value="paper2">Paper 2 (MC)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">Question</label>
-              <Select value={selectedQuestion} onValueChange={setSelectedQuestion}>
-                <SelectTrigger className="border-2 border-border">
-                  <SelectValue placeholder="Select question" />
-                </SelectTrigger>
-                <SelectContent>
-                  {Array.from({ length: 20 }, (_, i) => (
-                    <SelectItem key={i + 1} value={`q${i + 1}`}>
-                      Question {i + 1}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Step 2: Upload */}
-      <Card className="border-2 border-border">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg font-bold uppercase tracking-wide">
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-primary-foreground">
-              2
-            </span>
-            Upload Files
-          </CardTitle>
-          <CardDescription>
-            Upload the question paper, your answer, and the marking scheme (PDF only for marking scheme)
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
           <div className="grid gap-6 lg:grid-cols-3">
             {/* Question Paper Upload */}
             <div className="space-y-3">
@@ -211,7 +146,7 @@ export function PastPapersSection() {
             <Button
               size="lg"
               className="gap-2 bg-secondary text-secondary-foreground hover:bg-secondary/90"
-              disabled={!questionFile || !answerFile || !markingSchemeFile || gradingLoading}
+              disabled={!paperType || !questionFile || !answerFile || !markingSchemeFile || gradingLoading}
               onClick={handleGrade}
             >
               {gradingLoading ? 'Grading...' : 'Grade My Answer'}
@@ -221,12 +156,12 @@ export function PastPapersSection() {
         </CardContent>
       </Card>
 
-      {/* Step 3: AI Response */}
+      {/* Step 2: AI Response */}
       <Card className="border-2 border-border">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg font-bold uppercase tracking-wide">
             <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm text-primary-foreground">
-              3
+              2
             </span>
             AI Grading Result
             {gradingLoading && (

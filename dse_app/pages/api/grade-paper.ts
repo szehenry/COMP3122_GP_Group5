@@ -378,9 +378,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
       const prompt = buildGradingPrompt(questionText, markingSchemeText, answerText, gradeContext)
       const endpoint = "https://models.github.ai/inference";
       const model = "meta/Llama-4-Scout-17B-16E-Instruct";
-      const token = process.env.GITHUB_MODEL_API_KEY;
+      const token = process.env.GITHUB_MODEL_API_KEY_gpt5;
       if (!token) {
-        res.status(500).json({ error: 'Missing GITHUB_MODEL_API_KEY environment variable' });
+        res.status(500).json({ error: 'Missing GITHUB_MODEL_API_KEY_gpt5 environment variable' });
         return;
       }
       const client = ModelClient(endpoint, new AzureKeyCredential(token));
