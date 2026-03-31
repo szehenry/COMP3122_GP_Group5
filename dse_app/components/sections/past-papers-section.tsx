@@ -9,6 +9,7 @@ import { Upload, FileText, CheckCircle, MessageSquare, ChevronRight, Loader2 } f
 export function PastPapersSection() {
   const [questionFile, setQuestionFile] = useState<File | null>(null)
   const [answerFile, setAnswerFile] = useState<File | null>(null)
+  const [mcAnswer, setMcAnswer] = useState<string>("A") // New state for paper 2 MC Answer
   const [markingSchemeFile, setMarkingSchemeFile] = useState<File | null>(null)
   const [gradingResult, setGradingResult] = useState<any>(null)
   const [gradingLoading, setGradingLoading] = useState(false)
@@ -43,15 +44,22 @@ export function PastPapersSection() {
   // Handle grading
   const handleGrade = async () => {
     if (!paperType) return
-    if (sourceMode === 'upload' && (!questionFile || !answerFile || !markingSchemeFile)) return
+    if (sourceMode === 'upload' && paperType === 'paper1' && (!questionFile || !answerFile || !markingSchemeFile)) return
+    if (sourceMode === 'upload' && paperType === 'paper2' && (!questionFile || !markingSchemeFile || !mcAnswer)) return
+    
     setGradingLoading(true)
     try {
       const formData = new FormData()
       formData.append('sourceMode', sourceMode)
       formData.append('paperType', paperType)
+      if (paperType === 'paper2') {
+        formData.append('mcAnswer', mcAnswer)
+      }
       if (sourceMode === 'upload') {
         formData.append('question', questionFile as File)
-        formData.append('answer', answerFile as File)
+        if (paperType === 'paper1') {
+          formData.append('answer', answerFile as File)
+        }
         formData.append('markingScheme', markingSchemeFile as File)
       }
       // TODO: Add user_id if available
@@ -190,16 +198,35 @@ export function PastPapersSection() {
                 )}
               </div>
             </div>
-            {/* Answer Upload */}
+            {/* Answer Upload / MC Selection */}
             <div className="space-y-3">
               <h3 className="font-semibold text-foreground">Your Answer</h3>
-              <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-secondary bg-secondary/5 p-4">
+              <div className={`flex flex-col ${paperType === 'paper2' ? 'items-start justify-start' : 'items-center justify-center rounded-xl border-2 border-dashed border-secondary bg-secondary/5'} p-4 min-h-[140px]`}>
                 {sourceMode === 'example' ? (
                   <p className="my-4 text-sm text-muted-foreground">
                     {paperType === 'paper2'
                       ? 'You have chosen example answer (Paper 2 MC).'
                       : 'You have chosen example user answer (Paper 1).'}
                   </p>
+                ) : paperType === 'paper2' ? (
+                  <div className="flex flex-col items-start gap-4 w-full px-8">
+                    <p className="text-sm text-muted-foreground">Select your MC answer:</p>
+                    <div className="flex flex-col gap-3">
+                      {["A", "B", "C", "D"].map((opt) => (
+                        <label key={opt} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="mcAnswer"
+                            value={opt}
+                            checked={mcAnswer === opt}
+                            onChange={(e) => setMcAnswer(e.target.value)}
+                            className="w-4 h-4 text-primary"
+                          />
+                          <span className="font-semibold">{opt}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 ) : (
                   <>
                     {renderFilePreview(answerFile) || <Upload className="mx-auto h-12 w-12 text-muted-foreground/50" />}
@@ -252,7 +279,8 @@ export function PastPapersSection() {
               disabled={
                 !paperType ||
                 gradingLoading ||
-                (sourceMode === 'upload' && (!questionFile || !answerFile || !markingSchemeFile))
+                (sourceMode === 'upload' && paperType === 'paper1' && (!questionFile || !answerFile || !markingSchemeFile)) ||
+                (sourceMode === 'upload' && paperType === 'paper2' && (!questionFile || !markingSchemeFile))
               }
               onClick={handleGrade}
             >
