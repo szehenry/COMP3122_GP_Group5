@@ -422,7 +422,7 @@ function shouldRepairPayload(payload: Omit<GradingPayload, 'ocrDebug'>): boolean
 
 function buildGradingPrompt(questionText: string, markingSchemeText: string, answerText: string, ctx: GradeContext): string {
   const extraRule = ctx.paperType === 'paper2'
-    ? '9) For paper2 MC example mode, treat student answer as a single option. If it matches the marking scheme correct option (e.g. C), award full marks; otherwise award 0.'
+    ? '9) For paper2 MC, the total mark is ALWAYS 1. The number in parentheses in the marking scheme (e.g., (45)) is the percentage of candidates who answered correctly, NOT the score. Ignore it. Treat student answer as a single option. If it matches the correct option, score is 1, total is 1; otherwise score is 0, total is 1.'
     : '9) For paper1 short/long questions, award method/answer marks according to the scheme breakdown.'
 
   return `You are an expert HKDSE Mathematics marker.
@@ -465,16 +465,26 @@ ${answerText}`
 }
 
 function buildVisionGradingPrompt(ctx: GradeContext): string {
+  const imageInstructions = ctx.paperType === 'paper2' 
+    ? `You will receive 2 images in this order:
+1) Question image
+2) Marking scheme image`
+    : `You will receive 3 images in this order:
+1) Question image
+2) Student answer image
+3) Marking scheme image`
+
+  const extraRule = ctx.paperType === 'paper2'
+    ? '9) For paper2 MC, the total mark is ALWAYS 1. The number in parentheses in the marking scheme (e.g., (45)) is the percentage of candidates who answered correctly, NOT the score. Ignore it. Treat student answer as a single option. If it matches the correct option, score is 1, total is 1; otherwise score is 0, total is 1.'
+    : '9) For paper1 short/long questions, award method/answer marks according to the scheme breakdown.'
+
   return `You are an expert HKDSE Mathematics marker.
 
 Context:
 - Year: ${ctx.year || 'unknown'}
 - Paper Type: ${ctx.paperType || 'unknown'}
 
-You will receive 3 images in this order:
-1) Question image
-2) Student answer image
-3) Marking scheme image
+${imageInstructions}
 
 Rules:
 1) This is single-question grading mode.
@@ -485,6 +495,7 @@ Rules:
 6) solution must include concise key steps.
 7) concepts must be non-empty.
 8) Return ONLY valid JSON. No markdown and no extra text.
+${extraRule}
 
 Required JSON shape:
 {
@@ -561,6 +572,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     const getField = (f: any) => Array.isArray(f) ? f[0] : f
     const sourceMode = String(getField(fields.sourceMode) || 'upload')
     const useExample = sourceMode === 'example'
+    const mcAnswerField = String(getField(fields.mcAnswer) || '')
     // Handle case where files are arrays (Formidable v2+)
     const getFirst = (f: any) => Array.isArray(f) ? f[0] : f
     const questionFile = getFirst(files.question)
@@ -615,21 +627,35 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
         }
       }
     } else {
-      if (!getFilePath(questionFile) || !getFilePath(answerFile) || !getFilePath(markingSchemeFile)) {
-        res.status(400).json({ error: 'File upload failed: missing file path', debug: { questionFile, answerFile, markingSchemeFile } })
-        return
-      }
+      if (gradeContext.paperType === 'paper2') {
+        if (!getFilePath(questionFile) || !getFilePath(markingSchemeFile) || !mcAnswerField) {
+          res.status(400).json({ error: 'File upload failed: missing question, marking scheme, or MC answer' })
+          return
+        }
+        answerText = mcAnswerField
+        areAllImages = questionMimetype.startsWith('image/') && markingSchemeMimetype.startsWith('image/')
+        
+        if (!areAllImages) {
+          questionText = await extractTextFromFile(getFilePath(questionFile), questionMimetype)
+          markingSchemeText = await extractTextFromFile(getFilePath(markingSchemeFile), markingSchemeMimetype)
+        }
+      } else {
+        if (!getFilePath(questionFile) || !getFilePath(answerFile) || !getFilePath(markingSchemeFile)) {
+          res.status(400).json({ error: 'File upload failed: missing file path', debug: { questionFile, answerFile, markingSchemeFile } })
+          return
+        }
 
-      areAllImages =
-        questionMimetype.startsWith('image/') &&
-        answerMimetype.startsWith('image/') &&
-        markingSchemeMimetype.startsWith('image/')
+        areAllImages =
+          questionMimetype.startsWith('image/') &&
+          answerMimetype.startsWith('image/') &&
+          markingSchemeMimetype.startsWith('image/')
 
-      if (!areAllImages) {
-        // Text path for PDF/mixed uploads.
-        questionText = await extractTextFromFile(getFilePath(questionFile), questionMimetype)
-        answerText = await extractTextFromFile(getFilePath(answerFile), answerMimetype)
-        markingSchemeText = await extractTextFromFile(getFilePath(markingSchemeFile), markingSchemeMimetype)
+        if (!areAllImages) {
+          // Text path for PDF/mixed uploads.
+          questionText = await extractTextFromFile(getFilePath(questionFile), questionMimetype)
+          answerText = await extractTextFromFile(getFilePath(answerFile), answerMimetype)
+          markingSchemeText = await extractTextFromFile(getFilePath(markingSchemeFile), markingSchemeMimetype)
+        }
       }
     }
 
@@ -666,16 +692,31 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
     }
     const client = ModelClient(endpoint, new AzureKeyCredential(token));
 
-    const firstUserContent: any = useVisionPath
-      ? exampleVisionContent
-      : ((!useExample && areAllImages)
-      ? [
+    let firstUserContent: any
+    if (useVisionPath) {
+      firstUserContent = exampleVisionContent
+    } else if (!useExample && areAllImages) {
+      const baseImages = [
+        { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(questionFile), questionMimetype) } },
+      ]
+      
+      if (gradeContext.paperType === 'paper1') {
+        baseImages.push({ type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(answerFile), answerMimetype) } })
+        baseImages.push({ type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(markingSchemeFile), markingSchemeMimetype) } })
+        firstUserContent = [
           { type: 'text', text: buildVisionGradingPrompt(gradeContext) },
-          { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(questionFile), questionMimetype) } },
-          { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(answerFile), answerMimetype) } },
-          { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(markingSchemeFile), markingSchemeMimetype) } },
+          ...baseImages
         ]
-      : buildGradingPrompt(questionText, markingSchemeText, answerText, gradeContext))
+      } else {
+        baseImages.push({ type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(markingSchemeFile), markingSchemeMimetype) } })
+        firstUserContent = [
+          { type: 'text', text: `${buildVisionGradingPrompt(gradeContext)}\n\nStudent Answer: ${answerText}\n\nFor paper2, treat student answer as a single option. If it matches the marking scheme correct option, score is 1, total is 1; otherwise score is 0, total is 1. Ignore the number in parentheses in the marking scheme (it's percentage, not score).` },
+          ...baseImages
+        ]
+      }
+    } else {
+      firstUserContent = buildGradingPrompt(questionText, markingSchemeText, answerText, gradeContext)
+    }
 
     const response = await postChatWithModelFallback(
       client,
@@ -697,19 +738,33 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
 
     if (shouldRepairPayload(parsed) && gradeContext.paperType !== 'paper2') {
       const repairPrompt = buildRepairPrompt(questionText, markingSchemeText, answerText, rawContent, gradeContext)
-      const repairUserContent: any = useVisionPath
-        ? [
+      let repairUserContent: any
+      if (useVisionPath) {
+        repairUserContent = [
+          { type: 'text', text: `${buildVisionGradingPrompt(gradeContext)}\n\nPrevious incomplete output:\n${rawContent}` },
+          ...(exampleVisionContent || []).filter((item) => item?.type === 'image_url'),
+        ]
+      } else if (!useExample && areAllImages) {
+        const baseImages = [
+          { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(questionFile), questionMimetype) } },
+        ]
+        if (gradeContext.paperType === 'paper1') {
+          baseImages.push({ type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(answerFile), answerMimetype) } })
+          baseImages.push({ type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(markingSchemeFile), markingSchemeMimetype) } })
+          repairUserContent = [
             { type: 'text', text: `${buildVisionGradingPrompt(gradeContext)}\n\nPrevious incomplete output:\n${rawContent}` },
-            ...(exampleVisionContent || []).filter((item) => item?.type === 'image_url'),
+            ...baseImages
           ]
-        : ((!useExample && areAllImages)
-        ? [
-            { type: 'text', text: `${buildVisionGradingPrompt(gradeContext)}\n\nPrevious incomplete output:\n${rawContent}` },
-            { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(questionFile), questionMimetype) } },
-            { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(answerFile), answerMimetype) } },
-            { type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(markingSchemeFile), markingSchemeMimetype) } },
+        } else {
+          baseImages.push({ type: 'image_url', image_url: { url: fileToDataUrl(getFilePath(markingSchemeFile), markingSchemeMimetype) } })
+          repairUserContent = [
+            { type: 'text', text: `${buildVisionGradingPrompt(gradeContext)}\n\nStudent Answer: ${answerText}\n\nPrevious incomplete output:\n${rawContent}` },
+            ...baseImages
           ]
-        : repairPrompt)
+        }
+      } else {
+        repairUserContent = repairPrompt
+      }
 
       const repairResponse = await postChatWithModelFallback(
         client,
