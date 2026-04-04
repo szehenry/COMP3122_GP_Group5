@@ -32,43 +32,105 @@ const difficultyLevels = [
   { id: "hard", name: "Hard", color: "bg-red-500" },
 ]
 
-const sampleQuestion = {
-  id: 1,
-  topic: "Algebra",
-  difficulty: "Medium",
-  question:
-    "If f(x) = 2x² - 3x + 1, find the value of f(2) - f(-1).",
-  options: [
-    { id: "a", text: "3" },
-    { id: "b", text: "6" },
-    { id: "c", text: "9" },
-    { id: "d", text: "12" },
+// ==================== AI QUESTION GENERATOR ====================
+const generateQuestionWithAI = async (topicName: string, difficulty: string) => {
+  const token = process.env.NEXT_PUBLIC_GITHUB_LLM_TOKEN;
+
+  if (!token) {
+    throw new Error("GitHub token is missing. Add NEXT_PUBLIC_GITHUB_LLM_TOKEN to your .env.local file");
+  }
+
+
+const systemPrompt = `You are an expert HKDSE Mathematics examiner. Generate ONE brand-new multiple-choice question that is **extremely similar in style, wording, format, and difficulty** to the real DSE past-paper questions provided in the Math test.pdf.
+
+CRITICAL STYLE RULES (match these exactly):
+- Use formal, concise DSE-style English.
+- Start questions with phrases like: "If ...", "Let k be a constant such that ...", "In the figure,", "It is given that ...", "The ...", "Which of the following ... is/are true?", etc.
+- Geometry questions almost always begin with "In the figure,".
+- Algebra questions often involve expansion, factorisation, substitution, or constants.
+- For all mathematical expressions, use **plain text with Unicode** (e.g. 2x², x³, ∠CDE = 66°). 
+- **DO NOT use any $ or $$ LaTeX delimiters**.
+- Options must be short, realistic distractors.
+- Never add extra explanations or markdown in the JSON.
+
+Return ONLY a valid JSON object with this exact structure (no extra text):
+{
+  "id": 999,
+  "topic": "${topicName}",
+  "difficulty": "${difficulty}",
+  "question": "full question text here",
+  "options": [
+    {"id": "a", "text": "option text"},
+    {"id": "b", "text": "option text"},
+    {"id": "c", "text": "option text"},
+    {"id": "d", "text": "option text"}
   ],
-  correctAnswer: "c",
-  explanation:
-    "f(2) = 2(2)² - 3(2) + 1 = 8 - 6 + 1 = 3. f(-1) = 2(-1)² - 3(-1) + 1 = 2 + 3 + 1 = 6. Therefore, f(2) - f(-1) = 3 - 6 = -3. Wait, let me recalculate: f(2) - f(-1) = 3 - 6 = -3... Actually the answer should be |f(2) - f(-1)| = 3, but if we consider f(2) = 3 and f(-1) = 6, then we need f(-1) - f(2) = 6 - 3 = 3. The correct formula gives us 9.",
-  concept:
-    "Function evaluation involves substituting the given value into the function expression and simplifying using order of operations (PEMDAS).",
+  "correctAnswer": "c",
+  "explanation": "detailed step-by-step solution with all calculations shown",
+  "concept": "one-sentence key concept name"
 }
 
-export function PracticeQuestionsSection() {
-  const [selectedTopic, setSelectedTopic] = useState<string>("")
-  const [selectedDifficulty, setSelectedDifficulty] = useState<string>("")
-  const [showQuestion, setShowQuestion] = useState(false)
-  const [selectedAnswer, setSelectedAnswer] = useState<string>("")
-  const [showResult, setShowResult] = useState(false)
+Now generate one new ${difficulty} level question on the topic "${topicName}".`;
+  const response = await fetch("https://models.inference.ai.azure.com/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Generate one ${difficulty} ${topicName} DSE-style question now.` }
+      ],
+      temperature: 0.65,
+      max_tokens: 900,
+    }),
+  });
 
-  const handleGenerateQuestion = () => {
-    setShowQuestion(true)
-    setSelectedAnswer("")
-    setShowResult(false)
-  }
+  if (!response.ok) throw new Error("API error");
+
+  const data = await response.json();
+  const jsonString = data.choices[0].message.content.trim();
+  return JSON.parse(jsonString);
+};
+// ==================== END OF AI GENERATOR ====================
+
+export function PracticeQuestionsSection() {
+  const [selectedTopic, setSelectedTopic] = useState<string>("");
+  const [selectedDifficulty, setSelectedDifficulty] = useState<string>("");
+  const [showQuestion, setShowQuestion] = useState(false);
+  const [selectedAnswer, setSelectedAnswer] = useState<string>("");
+  const [showResult, setShowResult] = useState(false);
+  const [currentQuestion, setCurrentQuestion] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleGenerateQuestion = async () => {
+    if (!selectedTopic || !selectedDifficulty) return;
+
+    setLoading(true);
+    try {
+      const topicName = topics.find(t => t.id === selectedTopic)?.name || selectedTopic;
+      const generated = await generateQuestionWithAI(topicName, selectedDifficulty);
+      setCurrentQuestion(generated);
+      setShowQuestion(true);
+      setSelectedAnswer("");
+      setShowResult(false);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to generate question. Please check your GitHub token and internet connection.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmitAnswer = () => {
-    setShowResult(true)
-  }
+    setShowResult(true);
+  };
 
-  const isCorrect = selectedAnswer === sampleQuestion.correctAnswer
+  if (showQuestion && !currentQuestion) return null;
+
+  const isCorrect = selectedAnswer === currentQuestion?.correctAnswer;
 
   return (
     <div className="space-y-6">
@@ -80,7 +142,7 @@ export function PracticeQuestionsSection() {
         </p>
       </div>
 
-      {/* Topic Selection */}
+      {/* Topic Selection - FULL RESTORED */}
       <Card className="border-2 border-border">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg font-bold uppercase tracking-wide">
@@ -111,7 +173,7 @@ export function PracticeQuestionsSection() {
         </CardContent>
       </Card>
 
-      {/* Difficulty Selection */}
+      {/* Difficulty Selection - FULL RESTORED */}
       <Card className="border-2 border-border">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-lg font-bold uppercase tracking-wide">
@@ -145,31 +207,36 @@ export function PracticeQuestionsSection() {
         <Button
           size="lg"
           onClick={handleGenerateQuestion}
-          disabled={!selectedTopic || !selectedDifficulty}
+          disabled={!selectedTopic || !selectedDifficulty || loading}
           className="gap-2 bg-secondary text-secondary-foreground hover:bg-secondary/90"
         >
           <Sparkles className="h-5 w-5" />
-          Generate Question
+          {loading ? "Generating AI Question..." : "Generate Question"}
         </Button>
       </div>
 
       {/* Question Display */}
-      {showQuestion && (
+      {showQuestion && currentQuestion && (
         <Card className="border-2 border-border">
           <CardHeader className="bg-muted/30">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className="border-primary text-primary">
-                  {sampleQuestion.topic}
+                  {currentQuestion.topic}
                 </Badge>
-                <Badge className="bg-yellow-500/10 text-yellow-600">
-                  {sampleQuestion.difficulty}
+                <Badge className={`${
+                  currentQuestion.difficulty === "Easy" ? "bg-green-500/10 text-green-600" :
+                  currentQuestion.difficulty === "Medium" ? "bg-yellow-500/10 text-yellow-600" :
+                  "bg-red-500/10 text-red-600"
+                }`}>
+                  {currentQuestion.difficulty}
                 </Badge>
               </div>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={handleGenerateQuestion}
+                disabled={loading}
                 className="gap-2 border-2 border-border"
               >
                 <RefreshCw className="h-4 w-4" />
@@ -177,7 +244,7 @@ export function PracticeQuestionsSection() {
               </Button>
             </div>
             <CardTitle className="mt-4 text-lg leading-relaxed text-foreground">
-              {sampleQuestion.question}
+              {currentQuestion.question}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6 p-6">
@@ -187,19 +254,19 @@ export function PracticeQuestionsSection() {
               disabled={showResult}
               className="space-y-3"
             >
-              {sampleQuestion.options.map((option) => {
-                const isThisCorrect = option.id === sampleQuestion.correctAnswer
-                const isSelected = selectedAnswer === option.id
-                let optionStyle = "border-border hover:border-secondary/50"
+              {currentQuestion.options.map((option: any) => {
+                const isThisCorrect = option.id === currentQuestion.correctAnswer;
+                const isSelected = selectedAnswer === option.id;
+                let optionStyle = "border-border hover:border-secondary/50";
 
                 if (showResult) {
                   if (isThisCorrect) {
-                    optionStyle = "border-green-500 bg-green-500/5"
+                    optionStyle = "border-green-500 bg-green-500/5";
                   } else if (isSelected && !isThisCorrect) {
-                    optionStyle = "border-red-500 bg-red-500/5"
+                    optionStyle = "border-red-500 bg-red-500/5";
                   }
                 } else if (isSelected) {
-                  optionStyle = "border-secondary bg-secondary/5"
+                  optionStyle = "border-secondary bg-secondary/5";
                 }
 
                 return (
@@ -226,7 +293,7 @@ export function PracticeQuestionsSection() {
                       )}
                     </Label>
                   </div>
-                )
+                );
               })}
             </RadioGroup>
 
@@ -241,7 +308,6 @@ export function PracticeQuestionsSection() {
               </Button>
             )}
 
-            {/* Result Display */}
             {showResult && (
               <div className="space-y-4">
                 <div
@@ -258,7 +324,7 @@ export function PracticeQuestionsSection() {
                     <>
                       <XCircle className="h-6 w-6 text-red-500" />
                       <span className="font-bold text-red-600">
-                        Incorrect. The correct answer is {sampleQuestion.correctAnswer.toUpperCase()}.
+                        Incorrect. The correct answer is {currentQuestion.correctAnswer.toUpperCase()}.
                       </span>
                     </>
                   )}
@@ -273,7 +339,7 @@ export function PracticeQuestionsSection() {
                   </CardHeader>
                   <CardContent>
                     <p className="text-sm leading-relaxed text-foreground">
-                      {sampleQuestion.explanation}
+                      {currentQuestion.explanation}
                     </p>
                   </CardContent>
                 </Card>
@@ -287,13 +353,14 @@ export function PracticeQuestionsSection() {
                   </CardHeader>
                   <CardContent>
                     <p className="text-sm leading-relaxed text-muted-foreground">
-                      {sampleQuestion.concept}
+                      {currentQuestion.concept}
                     </p>
                   </CardContent>
                 </Card>
 
                 <Button
                   onClick={handleGenerateQuestion}
+                  disabled={loading}
                   className="w-full gap-2 bg-secondary text-secondary-foreground hover:bg-secondary/90"
                 >
                   <Sparkles className="h-5 w-5" />
@@ -305,5 +372,5 @@ export function PracticeQuestionsSection() {
         </Card>
       )}
     </div>
-  )
+  );
 }
