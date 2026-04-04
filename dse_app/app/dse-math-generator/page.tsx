@@ -6,18 +6,38 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft, FileImage, Lightbulb, Loader2, Sparkles, X } from "lucide-react"
+import ReactMarkdown from "react-markdown"
+import remarkMath from "remark-math"
+import rehypeKatex from "rehype-katex"
 
 interface GenerateMathQuestionResponse {
   generatedQuestion?: string
   answer?: string
   stepExplanation?: string
   explanation?: string
-  sourceExtractionMode?: "ocr" | "vision-fallback"
+  sourceExtractionMode?: "vision-primary" | "ocr-fallback"
   ocrExtractedText?: string
+  error?: string
 }
 
 const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"])
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
+
+function getStatusErrorMessage(status: number): string {
+  if (status === 504) {
+    return "Generation timed out. Please retry with a clearer/cropped image or try again in a moment."
+  }
+  if (status === 413) {
+    return "Image is too large. Please upload a file smaller than 5MB."
+  }
+  if (status === 422) {
+    return "Could not extract enough text from this image. Please upload a clearer one."
+  }
+  if (status >= 500) {
+    return "Server is busy right now. Please try again shortly."
+  }
+  return "Failed to generate a similar question. Please try again."
+}
 
 export default function DseMathGeneratorPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -28,7 +48,7 @@ export default function DseMathGeneratorPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
   const [lastRequestFailed, setLastRequestFailed] = useState(false)
-  const [sourceMode, setSourceMode] = useState<"ocr" | "vision-fallback" | "">("")
+  const [sourceMode, setSourceMode] = useState<"vision-primary" | "ocr-fallback" | "">("")
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const selectedFileName = useMemo(() => selectedFile?.name ?? "No file selected", [selectedFile])
@@ -134,17 +154,31 @@ export default function DseMathGeneratorPage() {
         body: formData,
       })
 
-      const responseText = await response.text()
-      let payload: GenerateMathQuestionResponse & { error?: string } = {}
+      const contentType = response.headers.get("content-type") || ""
+      const isJson = contentType.includes("application/json")
+      let payload: GenerateMathQuestionResponse = {}
+      let responseText = ""
 
-      try {
-        payload = JSON.parse(responseText)
-      } catch {
-        throw new Error("Server returned an invalid response format.")
+      if (isJson) {
+        try {
+          payload = (await response.json()) as GenerateMathQuestionResponse
+        } catch {
+          responseText = await response.text().catch(() => "")
+        }
+      } else {
+        responseText = await response.text()
       }
 
       if (!response.ok) {
-        throw new Error(payload.error || "Failed to generate a similar question. Please try again.")
+        throw new Error(payload.error || getStatusErrorMessage(response.status))
+      }
+
+      if (!isJson) {
+        throw new Error(
+          responseText
+            ? `Unexpected server response: ${responseText.slice(0, 120)}`
+            : "Unexpected server response format."
+        )
       }
 
       const nextGeneratedQuestion = payload.generatedQuestion?.trim() || ""
@@ -156,7 +190,7 @@ export default function DseMathGeneratorPage() {
       }
 
       setGeneratedQuestion(nextGeneratedQuestion)
-      setAnswerExplanation(`Answer:\n${answer}\n\nStep-by-step explanation:\n${explanation}`)
+      setAnswerExplanation(`### Answer\n\n${answer}\n\n### Step-by-step explanation\n\n${explanation}`)
       setOcrExtractedText(payload.ocrExtractedText?.trim() || "")
       setSourceMode(payload.sourceExtractionMode || "")
     } catch (requestError) {
@@ -292,11 +326,15 @@ export default function DseMathGeneratorPage() {
             <CardContent>
               {sourceMode && (
                 <p className="mb-3 text-xs text-muted-foreground">
-                  Extraction mode: {sourceMode === "vision-fallback" ? "Vision fallback" : "OCR"}
+                  Extraction mode: {sourceMode === "vision-primary" ? "Vision primary" : "OCR fallback"}
                 </p>
               )}
               {generatedQuestion ? (
-                <p className="whitespace-pre-wrap leading-relaxed text-foreground">{generatedQuestion}</p>
+                <div className="prose prose-sm max-w-none text-foreground">
+                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                    {generatedQuestion}
+                  </ReactMarkdown>
+                </div>
               ) : (
                 <p className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">
                   Upload a valid image and click Generate to see a similar DSE-style question here.
@@ -317,7 +355,11 @@ export default function DseMathGeneratorPage() {
             </CardHeader>
             <CardContent>
               {answerExplanation ? (
-                <p className="whitespace-pre-wrap leading-relaxed text-foreground">{answerExplanation}</p>
+                <div className="prose prose-sm max-w-none text-foreground">
+                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                    {answerExplanation}
+                  </ReactMarkdown>
+                </div>
               ) : (
                 <p className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">
                   The answer and step-by-step explanation will appear after successful generation.

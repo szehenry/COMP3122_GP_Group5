@@ -13,16 +13,16 @@ export const config = {
 
 const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"])
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
-const MODEL_TIMEOUT_MS = 90000
-const MAX_COMPLETION_TOKENS = 1200
-const PRIMARY_MODEL = "openai/gpt-5"
-const FALLBACK_MODEL = "openai/gpt-4.1-mini"
+const MODEL_TIMEOUT_MS = 120000
+const MAX_COMPLETION_TOKENS = 900
+const PRIMARY_MODEL = "openai/gpt-4.1-mini"
+const FALLBACK_MODEL = "openai/gpt-4.1-nano"
 
 type GenerateResponse = {
   generatedQuestion: string
   answer: string
   stepExplanation: string
-  sourceExtractionMode: "ocr" | "vision-fallback"
+  sourceExtractionMode: "vision-primary" | "ocr-fallback"
   ocrExtractedText: string
 }
 
@@ -82,6 +82,7 @@ async function postChatWithModelFallback(client: any, baseBody: any) {
     return await postChatWithTimeout(client, { ...baseBody, model: PRIMARY_MODEL }, MODEL_TIMEOUT_MS)
   } catch (error) {
     if (!isTimeoutError(error)) throw error
+    console.warn(`Primary model timeout (${PRIMARY_MODEL}), retrying with fallback (${FALLBACK_MODEL})`)
     return await postChatWithTimeout(client, { ...baseBody, model: FALLBACK_MODEL }, MODEL_TIMEOUT_MS)
   }
 }
@@ -201,10 +202,23 @@ function buildGenerationPrompt(sourceQuestion: string): string {
     "Then provide the exact answer and a concise step-by-step explanation suitable for students.",
     "Return ONLY valid JSON with this exact schema:",
     '{"generatedQuestion":"string","answer":"string","stepExplanation":"string"}',
-    "Do not include markdown, code fences, or additional keys.",
+    "In all fields, write human-readable Markdown and wrap every math expression in LaTeX delimiters: inline $...$ and block $$...$$.",
+    "Do not include markdown code fences or additional keys.",
     "",
     "Source question:",
     sourceQuestion,
+  ].join("\n")
+}
+
+function buildVisionGenerationInstruction(): string {
+  return [
+    "You are an expert Hong Kong DSE Mathematics teacher.",
+    "Read the uploaded question image and create ONE new question with similar topic and difficulty.",
+    "Then provide the exact answer and a concise step-by-step explanation suitable for students.",
+    "Return ONLY valid JSON with this exact schema:",
+    '{"generatedQuestion":"string","answer":"string","stepExplanation":"string"}',
+    "In all fields, write human-readable Markdown and wrap every math expression in LaTeX delimiters: inline $...$ and block $$...$$.",
+    "Do not include markdown code fences or additional keys.",
   ].join("\n")
 }
 
@@ -249,22 +263,10 @@ async function handler(req: NextApiRequest, res: NextApiResponse<GenerateRespons
     const endpoint = "https://models.github.ai/inference"
     const client = ModelClient(endpoint, new AzureKeyCredential(token))
 
-    const ocrText = await extractQuestionViaOcr(uploadedPath)
-    let sourceQuestion = ocrText
-    let extractionMode: "ocr" | "vision-fallback" = "ocr"
+    const ocrText = await extractQuestionViaOcr(uploadedPath).catch(() => "")
+    let extractionMode: "vision-primary" | "ocr-fallback" = "vision-primary"
 
-    // Fallback to vision extraction when OCR text is too short for stable generation.
-    if (sourceQuestion.length < 25) {
-      sourceQuestion = await extractQuestionViaVision(client, uploadedPath, mimetype)
-      extractionMode = "vision-fallback"
-    }
-
-    if (sourceQuestion.length < 20) {
-      res.status(422).json({ error: "Unable to extract enough question text. Please upload a clearer image." })
-      return
-    }
-
-    const generationResponse = await postChatWithModelFallback(client, {
+    let generationResponse = await postChatWithModelFallback(client, {
       messages: [
         {
           role: "system",
@@ -272,11 +274,41 @@ async function handler(req: NextApiRequest, res: NextApiResponse<GenerateRespons
         },
         {
           role: "user",
-          content: buildGenerationPrompt(sourceQuestion),
+          content: [
+            {
+              type: "text",
+              text: buildVisionGenerationInstruction(),
+            },
+            { type: "image_url", image_url: { url: fileToDataUrl(uploadedPath, mimetype) } },
+          ],
         },
       ],
       max_completion_tokens: MAX_COMPLETION_TOKENS,
     } as any)
+
+    if (isUnexpected(generationResponse)) {
+      // If vision generation fails, fallback to OCR text generation when possible.
+      const sourceQuestion = normalizeExtractedText(ocrText)
+      if (sourceQuestion.length < 20) {
+        res.status(502).json({ error: "Vision generation failed and OCR fallback was insufficient." })
+        return
+      }
+
+      extractionMode = "ocr-fallback"
+      generationResponse = await postChatWithModelFallback(client, {
+        messages: [
+          {
+            role: "system",
+            content: "You are an expert DSE Mathematics teacher creating high-quality practice material.",
+          },
+          {
+            role: "user",
+            content: buildGenerationPrompt(sourceQuestion),
+          },
+        ],
+        max_completion_tokens: MAX_COMPLETION_TOKENS,
+      } as any)
+    }
 
     if (isUnexpected(generationResponse)) {
       res.status(502).json({ error: "GitHub Model API error" })
