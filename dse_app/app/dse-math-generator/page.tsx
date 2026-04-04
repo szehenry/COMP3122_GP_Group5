@@ -452,11 +452,11 @@ export default function DseMathGeneratorPage() {
               {selectedFile && <p className="text-xs text-muted-foreground">Size: {formattedFileSize}</p>}
 
               {previewUrl && (
-                <div className="overflow-hidden rounded-md border border-border">
+                <div className="flex h-56 items-center justify-center overflow-hidden rounded-md border border-border bg-muted/20 p-2 sm:h-72">
                   <img
                     src={previewUrl}
                     alt="Selected math question preview"
-                    className="h-40 w-full object-cover"
+                    className="max-h-full w-full object-contain"
                   />
                 </div>
               )}
