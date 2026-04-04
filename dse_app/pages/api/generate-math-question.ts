@@ -31,6 +31,10 @@ type GenerateResult = {
   stepExplanation?: string
 }
 
+type ApiErrorResponse = {
+  error: string
+}
+
 function getFilePath(file: FormidableFile | undefined): string {
   return typeof file?.filepath === "string" ? file.filepath : ""
 }
@@ -124,6 +128,32 @@ async function parseForm(req: NextApiRequest): Promise<{ files: Files }> {
   })
 }
 
+function mapFormidableError(error: unknown): { status: number; message: string } | null {
+  if (!error || typeof error !== "object") {
+    return null
+  }
+
+  const maybeCode = (error as { code?: unknown }).code
+  const maybeMessage = (error as { message?: unknown }).message
+  const message = typeof maybeMessage === "string" ? maybeMessage.toLowerCase() : ""
+
+  if (maybeCode === 1009 || message.includes("maxfilesize") || message.includes("max file size")) {
+    return {
+      status: 413,
+      message: "Image is too large. Please upload a file smaller than 5MB.",
+    }
+  }
+
+  if (message.includes("maxfiles") || message.includes("too many files")) {
+    return {
+      status: 400,
+      message: "Please upload exactly one image file.",
+    }
+  }
+
+  return null
+}
+
 async function extractQuestionViaOcr(filePath: string): Promise<string> {
   const buffer = fs.readFileSync(filePath)
   const {
@@ -177,7 +207,7 @@ function buildGenerationPrompt(sourceQuestion: string): string {
   ].join("\n")
 }
 
-async function handler(req: NextApiRequest, res: NextApiResponse<GenerateResponse | { error: string }>) {
+async function handler(req: NextApiRequest, res: NextApiResponse<GenerateResponse | ApiErrorResponse>) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST")
     res.status(405).json({ error: "Method not allowed" })
@@ -187,12 +217,6 @@ async function handler(req: NextApiRequest, res: NextApiResponse<GenerateRespons
   let uploadedPath = ""
 
   try {
-    const token = process.env.GITHUB_MODEL_API_KEY_gpt5
-    if (!token) {
-      res.status(500).json({ error: "Missing GITHUB_MODEL_API_KEY_gpt5 environment variable" })
-      return
-    }
-
     const { files } = await parseForm(req)
     const rawFile = files.questionImage
     const uploadedFile = Array.isArray(rawFile) ? rawFile[0] : rawFile
@@ -212,6 +236,12 @@ async function handler(req: NextApiRequest, res: NextApiResponse<GenerateRespons
 
     if (!ALLOWED_MIME_TYPES.has(mimetype)) {
       res.status(400).json({ error: "Unsupported image type. Please upload PNG, JPG, JPEG, or WebP." })
+      return
+    }
+
+    const token = process.env.GITHUB_MODEL_API_KEY_gpt5
+    if (!token) {
+      res.status(500).json({ error: "Missing GITHUB_MODEL_API_KEY_gpt5 environment variable" })
       return
     }
 
@@ -274,8 +304,9 @@ async function handler(req: NextApiRequest, res: NextApiResponse<GenerateRespons
       sourceExtractionMode: extractionMode,
     })
   } catch (error) {
-    if (error instanceof Error && (error as any).code === 1009) {
-      res.status(413).json({ error: "Image is too large. Please upload a file smaller than 5MB." })
+    const mappedFormError = mapFormidableError(error)
+    if (mappedFormError) {
+      res.status(mappedFormError.status).json({ error: mappedFormError.message })
       return
     }
 

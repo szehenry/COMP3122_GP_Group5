@@ -12,6 +12,7 @@ interface GenerateMathQuestionResponse {
   answer?: string
   stepExplanation?: string
   explanation?: string
+  sourceExtractionMode?: "ocr" | "vision-fallback"
 }
 
 const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"])
@@ -25,6 +26,7 @@ export default function DseMathGeneratorPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
   const [lastRequestFailed, setLastRequestFailed] = useState(false)
+  const [sourceMode, setSourceMode] = useState<"ocr" | "vision-fallback" | "">("")
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const selectedFileName = useMemo(() => selectedFile?.name ?? "No file selected", [selectedFile])
@@ -53,6 +55,7 @@ export default function DseMathGeneratorPage() {
   const resetOutput = () => {
     setGeneratedQuestion("")
     setAnswerExplanation("")
+    setSourceMode("")
   }
 
   const resetFileSelection = () => {
@@ -151,6 +154,7 @@ export default function DseMathGeneratorPage() {
 
       setGeneratedQuestion(nextGeneratedQuestion)
       setAnswerExplanation(`Answer:\n${answer}\n\nStep-by-step explanation:\n${explanation}`)
+      setSourceMode(payload.sourceExtractionMode || "")
     } catch (requestError) {
       const message =
         requestError instanceof Error
@@ -201,7 +205,7 @@ export default function DseMathGeneratorPage() {
                 Upload Question
               </CardTitle>
               <CardDescription>
-                Phase 1 shell: choose one image file for your source DSE question.
+                Upload one image file for your source DSE question.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -261,6 +265,11 @@ export default function DseMathGeneratorPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
+              {sourceMode && (
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Extraction mode: {sourceMode === "vision-fallback" ? "Vision fallback" : "OCR"}
+                </p>
+              )}
               {generatedQuestion ? (
                 <p className="whitespace-pre-wrap leading-relaxed text-foreground">{generatedQuestion}</p>
               ) : (
