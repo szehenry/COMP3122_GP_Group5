@@ -24,6 +24,7 @@ interface GenerateMathQuestionResponse {
 
 const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"])
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
+const SAMPLE_IMAGE_NAMES = ["testq1.png", "testq2.png", "testq3.png"]
 
 function normalizeMathMarkdown(input: string): string {
   if (!input) {
@@ -116,6 +117,7 @@ export default function DseMathGeneratorPage() {
   const [answerExplanation, setAnswerExplanation] = useState("")
   const [ocrExtractedText, setOcrExtractedText] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [sampleLoadingName, setSampleLoadingName] = useState<string | null>(null)
   const [error, setError] = useState("")
   const [lastRequestFailed, setLastRequestFailed] = useState(false)
   const [sourceMode, setSourceMode] = useState<"vision-primary" | "ocr-fallback" | "">("")
@@ -197,6 +199,41 @@ export default function DseMathGeneratorPage() {
     setLastRequestFailed(false)
     setError("")
     resetOutput()
+  }
+
+  const handleUseSample = async (sampleName: string) => {
+    setSampleLoadingName(sampleName)
+    setError("")
+    setLastRequestFailed(false)
+    resetOutput()
+
+    try {
+      const response = await fetch(`/samples/${sampleName}`)
+      if (!response.ok) {
+        throw new Error("Unable to load sample question image.")
+      }
+
+      const blob = await response.blob()
+      const sampleFile = new File([blob], sampleName, { type: blob.type || "image/png" })
+      const validationError = validateFile(sampleFile)
+      if (validationError) {
+        throw new Error(validationError)
+      }
+
+      setSelectedFile(sampleFile)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ""
+      }
+    } catch (sampleError) {
+      setSelectedFile(null)
+      const message =
+        sampleError instanceof Error
+          ? sampleError.message
+          : "Failed to prepare sample question image."
+      setError(message)
+    } finally {
+      setSampleLoadingName(null)
+    }
   }
 
   const handleGenerate = async () => {
@@ -329,6 +366,30 @@ export default function DseMathGeneratorPage() {
                 accept="image/png,image/jpeg,image/jpg,image/webp"
                 onChange={handleFileChange}
               />
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">Try sample questions:</p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  {SAMPLE_IMAGE_NAMES.map((sampleName) => (
+                    <Button
+                      key={sampleName}
+                      variant="secondary"
+                      type="button"
+                      size="sm"
+                      disabled={isLoading || sampleLoadingName !== null}
+                      onClick={() => handleUseSample(sampleName)}
+                    >
+                      {sampleLoadingName === sampleName ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Loading...
+                        </>
+                      ) : (
+                        sampleName
+                      )}
+                    </Button>
+                  ))}
+                </div>
+              </div>
               <p className="text-sm text-muted-foreground">Selected: {selectedFileName}</p>
               {selectedFile && <p className="text-xs text-muted-foreground">Size: {formattedFileSize}</p>}
 
@@ -343,7 +404,11 @@ export default function DseMathGeneratorPage() {
               )}
 
               <div className="flex gap-2">
-                <Button className="flex-1" disabled={!selectedFile || isLoading} onClick={handleGenerate}>
+                <Button
+                  className="flex-1"
+                  disabled={!selectedFile || isLoading || sampleLoadingName !== null}
+                  onClick={handleGenerate}
+                >
                   {isLoading ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -358,7 +423,7 @@ export default function DseMathGeneratorPage() {
                 </Button>
                 <Button
                   variant="outline"
-                  disabled={!selectedFile || isLoading}
+                  disabled={!selectedFile || isLoading || sampleLoadingName !== null}
                   onClick={resetFileSelection}
                 >
                   <X className="h-4 w-4" />
