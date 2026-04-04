@@ -22,6 +22,8 @@ type GenerateResponse = {
   generatedQuestion: string
   answer: string
   stepExplanation: string
+  mathTopic: string
+  conceptExplanation: string
   sourceExtractionMode: "vision-primary" | "ocr-fallback"
   ocrExtractedText: string
 }
@@ -30,6 +32,8 @@ type GenerateResult = {
   generatedQuestion?: string
   answer?: string
   stepExplanation?: string
+  mathTopic?: string
+  conceptExplanation?: string
 }
 
 type ApiErrorResponse = {
@@ -104,6 +108,9 @@ function parseGenerateResult(rawText: string): GenerateResult {
     generatedQuestion: typeof parsed.generatedQuestion === "string" ? parsed.generatedQuestion.trim() : "",
     answer: typeof parsed.answer === "string" ? parsed.answer.trim() : "",
     stepExplanation: typeof parsed.stepExplanation === "string" ? parsed.stepExplanation.trim() : "",
+    mathTopic: typeof parsed.mathTopic === "string" ? parsed.mathTopic.trim() : "",
+    conceptExplanation:
+      typeof parsed.conceptExplanation === "string" ? parsed.conceptExplanation.trim() : "",
   }
 }
 
@@ -199,9 +206,13 @@ function buildGenerationPrompt(sourceQuestion: string): string {
   return [
     "You are an expert Hong Kong DSE Mathematics teacher.",
     "Create ONE new question similar in style, topic, and difficulty to the source question.",
-    "Then provide the exact answer and a concise step-by-step explanation suitable for students.",
+    "Then provide the exact answer, concise step-by-step explanation, the math topic name, and concept explanation suitable for students.",
     "Return ONLY valid JSON with this exact schema:",
-    '{"generatedQuestion":"string","answer":"string","stepExplanation":"string"}',
+    '{"generatedQuestion":"string","answer":"string","stepExplanation":"string","mathTopic":"string","conceptExplanation":"string"}',
+    "The stepExplanation must be detailed and easy to read for students (at least 5 complete steps).",
+    "Do NOT use bullet points for stepExplanation. Use short paragraphs or numbered Step 1, Step 2 style.",
+    "Use this exact repeating style for each step: 'Step N: short explanation sentence' then on the next line a related formula in block math $$...$$.",
+    "Never place Step 1, Step 2, Step 3 in one single paragraph; each step must be separated by a blank line.",
     "In all fields, write human-readable Markdown and wrap every math expression in LaTeX delimiters: inline $...$ and block $$...$$.",
     "Do not include markdown code fences or additional keys.",
     "",
@@ -214,9 +225,13 @@ function buildVisionGenerationInstruction(): string {
   return [
     "You are an expert Hong Kong DSE Mathematics teacher.",
     "Read the uploaded question image and create ONE new question with similar topic and difficulty.",
-    "Then provide the exact answer and a concise step-by-step explanation suitable for students.",
+    "Then provide the exact answer, concise step-by-step explanation, the math topic name, and concept explanation suitable for students.",
     "Return ONLY valid JSON with this exact schema:",
-    '{"generatedQuestion":"string","answer":"string","stepExplanation":"string"}',
+    '{"generatedQuestion":"string","answer":"string","stepExplanation":"string","mathTopic":"string","conceptExplanation":"string"}',
+    "The stepExplanation must be detailed and easy to read for students (at least 5 complete steps).",
+    "Do NOT use bullet points for stepExplanation. Use short paragraphs or numbered Step 1, Step 2 style.",
+    "Use this exact repeating style for each step: 'Step N: short explanation sentence' then on the next line a related formula in block math $$...$$.",
+    "Never place Step 1, Step 2, Step 3 in one single paragraph; each step must be separated by a blank line.",
     "In all fields, write human-readable Markdown and wrap every math expression in LaTeX delimiters: inline $...$ and block $$...$$.",
     "Do not include markdown code fences or additional keys.",
   ].join("\n")
@@ -325,7 +340,13 @@ async function handler(req: NextApiRequest, res: NextApiResponse<GenerateRespons
       return
     }
 
-    if (!parsed.generatedQuestion || !parsed.answer || !parsed.stepExplanation) {
+    if (
+      !parsed.generatedQuestion ||
+      !parsed.answer ||
+      !parsed.stepExplanation ||
+      !parsed.mathTopic ||
+      !parsed.conceptExplanation
+    ) {
       res.status(502).json({ error: "Model response is incomplete. Please try again." })
       return
     }
@@ -334,6 +355,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse<GenerateRespons
       generatedQuestion: parsed.generatedQuestion,
       answer: parsed.answer,
       stepExplanation: parsed.stepExplanation,
+      mathTopic: parsed.mathTopic,
+      conceptExplanation: parsed.conceptExplanation,
       sourceExtractionMode: extractionMode,
       ocrExtractedText: ocrText,
     })

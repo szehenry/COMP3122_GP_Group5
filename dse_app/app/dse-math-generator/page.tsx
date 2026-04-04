@@ -14,6 +14,8 @@ interface GenerateMathQuestionResponse {
   generatedQuestion?: string
   answer?: string
   stepExplanation?: string
+  mathTopic?: string
+  conceptExplanation?: string
   explanation?: string
   sourceExtractionMode?: "vision-primary" | "ocr-fallback"
   ocrExtractedText?: string
@@ -22,6 +24,73 @@ interface GenerateMathQuestionResponse {
 
 const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"])
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
+
+function normalizeMathMarkdown(input: string): string {
+  if (!input) {
+    return ""
+  }
+
+  return input
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, expr: string) => `\n$$${expr.trim()}$$\n`)
+    .replace(/\\\((.*?)\\\)/g, (_, expr: string) => `$${expr.trim()}$`)
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+}
+
+function formatExplanationNarrative(input: string): string {
+  const normalized = normalizeMathMarkdown(input)
+  if (!normalized) {
+    return ""
+  }
+
+  const cleaned = normalized
+    .replace(/\bStep\s*(\d+)\s*:/gi, "\nStep $1:")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
+
+  const stepMatches = [...cleaned.matchAll(/Step\s*(\d+)\s*:\s*([\s\S]*?)(?=\nStep\s*\d+\s*:|$)/gi)]
+
+  const normalizeStepBlock = (stepNumber: string, content: string): string => {
+    const stepText = content.replace(/\s+/g, " ").trim()
+    const blockFormulas = [...stepText.matchAll(/\$\$([\s\S]*?)\$\$/g)].map((m) => m[1].trim())
+    const inlineFormulas = [...stepText.matchAll(/\$([^$]+)\$/g)].map((m) => m[1].trim())
+
+    const formulas = [...blockFormulas, ...inlineFormulas].filter((x) => x.length > 0)
+    const textWithoutFormulas = stepText
+      .replace(/\$\$[\s\S]*?\$\$/g, "")
+      .replace(/\$[^$]+\$/g, "")
+      .replace(/\s{2,}/g, " ")
+      .replace(/\s*([.,;:!?])/g, "$1")
+      .trim()
+
+    const prettyStepText = textWithoutFormulas || "Apply this transformation."
+    const formulaLine = formulas[0] ? `$$${formulas[0]}$$` : "$$\\text{(derive the equation for this step)}$$"
+    return `Step ${stepNumber}: ${prettyStepText}\n\n${formulaLine}`
+  }
+
+  if (stepMatches.length > 0) {
+    return stepMatches
+      .map((match) => normalizeStepBlock(match[1], match[2]))
+      .join("\n\n")
+  }
+
+  const sentenceChunks = cleaned
+    .split(/(?<=[.!?])\s+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+
+  return sentenceChunks
+    .map((chunk, index) => {
+      const formulas = [...chunk.matchAll(/\$([^$]+)\$/g)].map((m) => m[1].trim())
+      const textOnly = chunk.replace(/\$[^$]+\$/g, "").replace(/\s{2,}/g, " ").trim()
+      const formulaLine = formulas[0] ? `$$${formulas[0]}$$` : "$$\\text{(derive the equation for this step)}$$"
+      return `Step ${index + 1}: ${textOnly || "Apply this transformation."}\n\n${formulaLine}`
+    })
+    .join("\n\n")
+}
 
 function getStatusErrorMessage(status: number): string {
   if (status === 504) {
@@ -43,6 +112,7 @@ export default function DseMathGeneratorPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState("")
   const [generatedQuestion, setGeneratedQuestion] = useState("")
+  const [conceptSummary, setConceptSummary] = useState("")
   const [answerExplanation, setAnswerExplanation] = useState("")
   const [ocrExtractedText, setOcrExtractedText] = useState("")
   const [isLoading, setIsLoading] = useState(false)
@@ -76,6 +146,7 @@ export default function DseMathGeneratorPage() {
 
   const resetOutput = () => {
     setGeneratedQuestion("")
+    setConceptSummary("")
     setAnswerExplanation("")
     setOcrExtractedText("")
     setSourceMode("")
@@ -181,15 +252,20 @@ export default function DseMathGeneratorPage() {
         )
       }
 
-      const nextGeneratedQuestion = payload.generatedQuestion?.trim() || ""
-      const answer = payload.answer?.trim() || ""
-      const explanation = (payload.stepExplanation || payload.explanation || "").trim()
+      const nextGeneratedQuestion = normalizeMathMarkdown(payload.generatedQuestion?.trim() || "")
+      const answer = normalizeMathMarkdown(payload.answer?.trim() || "")
+      const explanation = formatExplanationNarrative(
+        (payload.stepExplanation || payload.explanation || "").trim()
+      )
+      const mathTopic = normalizeMathMarkdown(payload.mathTopic?.trim() || "")
+      const conceptExplanation = normalizeMathMarkdown(payload.conceptExplanation?.trim() || "")
 
-      if (!nextGeneratedQuestion || !answer || !explanation) {
+      if (!nextGeneratedQuestion || !answer || !explanation || !mathTopic || !conceptExplanation) {
         throw new Error("Generation succeeded but response is incomplete. Please retry.")
       }
 
       setGeneratedQuestion(nextGeneratedQuestion)
+      setConceptSummary(`### Topic\n\n${mathTopic}\n\n### Concept Used\n\n${conceptExplanation}`)
       setAnswerExplanation(`### Answer\n\n${answer}\n\n### Step-by-step explanation\n\n${explanation}`)
       setOcrExtractedText(payload.ocrExtractedText?.trim() || "")
       setSourceMode(payload.sourceExtractionMode || "")
@@ -307,10 +383,21 @@ export default function DseMathGeneratorPage() {
                 </p>
               )}
               {generatedQuestion ? (
-                <div className="prose prose-sm max-w-none text-foreground">
-                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                    {generatedQuestion}
-                  </ReactMarkdown>
+                <div className="space-y-5">
+                  <div className="prose prose-sm max-w-none text-foreground leading-relaxed">
+                    <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                      {generatedQuestion}
+                    </ReactMarkdown>
+                  </div>
+                  {conceptSummary && (
+                    <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-3">
+                      <div className="prose prose-sm max-w-none text-foreground leading-relaxed">
+                        <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                          {conceptSummary}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <p className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">
@@ -330,7 +417,7 @@ export default function DseMathGeneratorPage() {
             </CardHeader>
             <CardContent>
               {answerExplanation ? (
-                <div className="prose prose-sm max-w-none text-foreground">
+                <div className="prose prose-sm max-w-none text-foreground leading-relaxed">
                   <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
                     {answerExplanation}
                   </ReactMarkdown>
