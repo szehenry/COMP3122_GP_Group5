@@ -23,6 +23,7 @@ type GenerateResponse = {
   answer: string
   stepExplanation: string
   sourceExtractionMode: "ocr" | "vision-fallback"
+  ocrExtractedText: string
 }
 
 type GenerateResult = {
@@ -302,6 +303,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<GenerateRespons
       answer: parsed.answer,
       stepExplanation: parsed.stepExplanation,
       sourceExtractionMode: extractionMode,
+      ocrExtractedText: ocrText,
     })
   } catch (error) {
     const mappedFormError = mapFormidableError(error)

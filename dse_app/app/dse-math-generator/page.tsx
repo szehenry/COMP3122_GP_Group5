@@ -13,6 +13,7 @@ interface GenerateMathQuestionResponse {
   stepExplanation?: string
   explanation?: string
   sourceExtractionMode?: "ocr" | "vision-fallback"
+  ocrExtractedText?: string
 }
 
 const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"])
@@ -23,6 +24,7 @@ export default function DseMathGeneratorPage() {
   const [previewUrl, setPreviewUrl] = useState("")
   const [generatedQuestion, setGeneratedQuestion] = useState("")
   const [answerExplanation, setAnswerExplanation] = useState("")
+  const [ocrExtractedText, setOcrExtractedText] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
   const [lastRequestFailed, setLastRequestFailed] = useState(false)
@@ -55,6 +57,7 @@ export default function DseMathGeneratorPage() {
   const resetOutput = () => {
     setGeneratedQuestion("")
     setAnswerExplanation("")
+    setOcrExtractedText("")
     setSourceMode("")
   }
 
@@ -154,6 +157,7 @@ export default function DseMathGeneratorPage() {
 
       setGeneratedQuestion(nextGeneratedQuestion)
       setAnswerExplanation(`Answer:\n${answer}\n\nStep-by-step explanation:\n${explanation}`)
+      setOcrExtractedText(payload.ocrExtractedText?.trim() || "")
       setSourceMode(payload.sourceExtractionMode || "")
     } catch (requestError) {
       const message =
@@ -197,7 +201,7 @@ export default function DseMathGeneratorPage() {
           </div>
         )}
 
-        <section className="grid gap-6 lg:grid-cols-3">
+        <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
           <Card className="border-2 border-border">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-lg font-bold uppercase tracking-wide">
@@ -251,6 +255,27 @@ export default function DseMathGeneratorPage() {
                   Reset
                 </Button>
               </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-2 border-border">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-lg font-bold uppercase tracking-wide">
+                <FileImage className="h-5 w-5 text-secondary" />
+                OCR Extracted Text
+              </CardTitle>
+              <CardDescription>
+                Raw text recognized from your uploaded question image.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {ocrExtractedText ? (
+                <p className="whitespace-pre-wrap leading-relaxed text-foreground">{ocrExtractedText}</p>
+              ) : (
+                <p className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">
+                  OCR extracted text will appear here after generation starts.
+                </p>
+              )}
             </CardContent>
           </Card>
 
