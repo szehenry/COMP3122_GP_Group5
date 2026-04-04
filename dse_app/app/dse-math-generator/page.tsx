@@ -235,7 +235,7 @@ export default function DseMathGeneratorPage() {
           </div>
         )}
 
-        <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+        <section className="space-y-6">
           <Card className="border-2 border-border">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-lg font-bold uppercase tracking-wide">
@@ -295,33 +295,10 @@ export default function DseMathGeneratorPage() {
           <Card className="border-2 border-border">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-lg font-bold uppercase tracking-wide">
-                <FileImage className="h-5 w-5 text-secondary" />
-                OCR Extracted Text
-              </CardTitle>
-              <CardDescription>
-                Raw text recognized from your uploaded question image.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {ocrExtractedText ? (
-                <p className="whitespace-pre-wrap leading-relaxed text-foreground">{ocrExtractedText}</p>
-              ) : (
-                <p className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">
-                  OCR extracted text will appear here after generation starts.
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="border-2 border-border">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg font-bold uppercase tracking-wide">
                 <Sparkles className="h-5 w-5 text-secondary" />
                 Generated Question
               </CardTitle>
-              <CardDescription>
-                Generated similar question from your uploaded source image.
-              </CardDescription>
+              <CardDescription>Generated similar question from your uploaded source image.</CardDescription>
             </CardHeader>
             <CardContent>
               {sourceMode && (
@@ -349,9 +326,7 @@ export default function DseMathGeneratorPage() {
                 <Lightbulb className="h-5 w-5 text-secondary" />
                 Answer and Explanation
               </CardTitle>
-              <CardDescription>
-                Model answer and step-by-step explanation will appear here.
-              </CardDescription>
+              <CardDescription>Model answer and step-by-step explanation will appear here.</CardDescription>
             </CardHeader>
             <CardContent>
               {answerExplanation ? (
@@ -363,6 +338,25 @@ export default function DseMathGeneratorPage() {
               ) : (
                 <p className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">
                   The answer and step-by-step explanation will appear after successful generation.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-2 border-border">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-lg font-bold uppercase tracking-wide">
+                <FileImage className="h-5 w-5 text-secondary" />
+                OCR Extracted Text
+              </CardTitle>
+              <CardDescription>Raw text recognized from your uploaded question image.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {ocrExtractedText ? (
+                <p className="whitespace-pre-wrap leading-relaxed text-foreground">{ocrExtractedText}</p>
+              ) : (
+                <p className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">
+                  OCR extracted text will appear here after generation starts.
                 </p>
               )}
             </CardContent>
