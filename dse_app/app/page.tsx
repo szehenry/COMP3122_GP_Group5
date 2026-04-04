@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { SidebarNav } from "@/components/sidebar-nav"
 import { DashboardSection } from "@/components/sections/dashboard-section"
 import { PastPapersSection } from "@/components/sections/past-papers-section"
@@ -14,6 +14,13 @@ import { Button } from "@/components/ui/button"
 export default function HomePage() {
   const [activeSection, setActiveSection] = useState("dashboard")
   const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  useEffect(() => {
+    const section = new URLSearchParams(window.location.search).get("section")
+    if (section) {
+      setActiveSection(section)
+    }
+  }, [])
 
   const renderSection = () => {
     switch (activeSection) {

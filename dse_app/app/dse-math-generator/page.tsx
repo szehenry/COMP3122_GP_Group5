@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { SidebarNav } from "@/components/sidebar-nav"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, FileImage, Lightbulb, Loader2, Sparkles, X } from "lucide-react"
+import { ArrowLeft, FileImage, Lightbulb, Loader2, Menu, Sparkles, X } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkMath from "remark-math"
 import rehypeKatex from "rehype-katex"
@@ -110,6 +112,7 @@ function getStatusErrorMessage(status: number): string {
 }
 
 export default function DseMathGeneratorPage() {
+  const router = useRouter()
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState("")
   const [generatedQuestion, setGeneratedQuestion] = useState("")
@@ -121,6 +124,7 @@ export default function DseMathGeneratorPage() {
   const [error, setError] = useState("")
   const [lastRequestFailed, setLastRequestFailed] = useState(false)
   const [sourceMode, setSourceMode] = useState<"vision-primary" | "ocr-fallback" | "">("")
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const selectedFileName = useMemo(() => selectedFile?.name ?? "No file selected", [selectedFile])
@@ -319,8 +323,62 @@ export default function DseMathGeneratorPage() {
   }
 
   return (
-    <main className="min-h-screen bg-background">
-      <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-8 lg:px-8">
+    <div className="min-h-screen bg-background">
+      <header className="sticky top-0 z-50 flex h-16 items-center justify-between border-b border-border bg-card px-4 lg:hidden">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
+            <svg
+              className="h-5 w-5 text-primary-foreground"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"
+              />
+            </svg>
+          </div>
+          <div>
+            <h1 className="text-lg font-bold">DSETutor</h1>
+            <p className="text-xs text-muted-foreground">Math Edition</p>
+          </div>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+          className="lg:hidden"
+        >
+          {sidebarOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
+        </Button>
+      </header>
+
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-foreground/50 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <div
+        className={`fixed inset-y-0 left-0 z-50 w-64 transform transition-transform duration-300 lg:translate-x-0 ${
+          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <SidebarNav
+          activeSection="dse-math-generator"
+          onSectionChange={(section) => {
+            setSidebarOpen(false)
+            router.push(`/?section=${section}`)
+          }}
+        />
+      </div>
+
+      <main className="lg:ml-64">
+        <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-8 lg:px-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-foreground">DSE Math Question Generator</h1>
@@ -514,7 +572,8 @@ export default function DseMathGeneratorPage() {
             </CardContent>
           </Card>
         </section>
-      </div>
-    </main>
+        </div>
+      </main>
+    </div>
   )
 }
