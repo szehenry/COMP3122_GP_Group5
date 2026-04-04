@@ -151,7 +151,8 @@ Return ONLY this exact JSON:
   "explanation": "detailed step-by-step solution using only plain text Unicode math",
   "concept": "one-sentence key concept",
   "figureDescription": "detailed description of the diagram (only for geometry questions)",
-  "imagePrompt": "highly detailed prompt for Grok Imagine to generate the exact diagram (only for geometry questions, otherwise empty string)"
+  "imagePrompt": "Same as the question
+ // highly detailed prompt for Grok Imagine to generate the exact diagram (only for geometry questions, otherwise empty string)//
 }
 
 Now generate one new ${difficulty} level question on the topic "${topicName}".`;
