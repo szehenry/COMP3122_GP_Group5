@@ -1,38 +1,166 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
-import { ArrowLeft, FileImage, Lightbulb, Sparkles } from "lucide-react"
+import { ArrowLeft, FileImage, Lightbulb, Loader2, Sparkles, X } from "lucide-react"
+
+interface GenerateMathQuestionResponse {
+  generatedQuestion?: string
+  answer?: string
+  stepExplanation?: string
+  explanation?: string
+}
+
+const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"])
+const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
 
 export default function DseMathGeneratorPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [previewUrl, setPreviewUrl] = useState("")
   const [generatedQuestion, setGeneratedQuestion] = useState("")
   const [answerExplanation, setAnswerExplanation] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState("")
+  const [lastRequestFailed, setLastRequestFailed] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const selectedFileName = useMemo(() => selectedFile?.name ?? "No file selected", [selectedFile])
+  const formattedFileSize = useMemo(() => {
+    if (!selectedFile) {
+      return ""
+    }
+
+    return `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB`
+  }, [selectedFile])
+
+  useEffect(() => {
+    if (!selectedFile) {
+      setPreviewUrl("")
+      return
+    }
+
+    const objectUrl = URL.createObjectURL(selectedFile)
+    setPreviewUrl(objectUrl)
+
+    return () => {
+      URL.revokeObjectURL(objectUrl)
+    }
+  }, [selectedFile])
+
+  const resetOutput = () => {
+    setGeneratedQuestion("")
+    setAnswerExplanation("")
+  }
+
+  const resetFileSelection = () => {
+    setSelectedFile(null)
+    setError("")
+    setLastRequestFailed(false)
+    resetOutput()
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""
+    }
+  }
+
+  const validateFile = (file: File): string => {
+    if (!ALLOWED_MIME_TYPES.has(file.type)) {
+      return "Please upload an image file in PNG, JPG, JPEG, or WebP format."
+    }
+
+    if (file.size > MAX_IMAGE_SIZE_BYTES) {
+      return "Image is too large. Please upload a file smaller than 5MB."
+    }
+
+    return ""
+  }
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const nextFile = event.target.files?.[0] ?? null
+    if (!nextFile) {
+      resetFileSelection()
+      return
+    }
+
+    const validationError = validateFile(nextFile)
+    if (validationError) {
+      setSelectedFile(null)
+      setLastRequestFailed(false)
+      resetOutput()
+      setError(validationError)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ""
+      }
+      return
+    }
+
     setSelectedFile(nextFile)
+    setLastRequestFailed(false)
     setError("")
+    resetOutput()
   }
 
-  const handleGenerateStub = () => {
+  const handleGenerate = async () => {
+    if (!selectedFile) {
+      setError("Please upload a question image first.")
+      return
+    }
+
+    const validationError = validateFile(selectedFile)
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+
     setIsLoading(true)
     setError("")
-    setGeneratedQuestion("")
-    setAnswerExplanation("")
+    setLastRequestFailed(false)
+    resetOutput()
 
-    // Phase 1 is UI shell only. API wiring will be added in Phase 2.
-    window.setTimeout(() => {
+    try {
+      const formData = new FormData()
+      formData.append("questionImage", selectedFile)
+
+      const response = await fetch("/api/generate-math-question", {
+        method: "POST",
+        body: formData,
+      })
+
+      const responseText = await response.text()
+      let payload: GenerateMathQuestionResponse & { error?: string } = {}
+
+      try {
+        payload = JSON.parse(responseText)
+      } catch {
+        throw new Error("Server returned an invalid response format.")
+      }
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to generate a similar question. Please try again.")
+      }
+
+      const nextGeneratedQuestion = payload.generatedQuestion?.trim() || ""
+      const answer = payload.answer?.trim() || ""
+      const explanation = (payload.stepExplanation || payload.explanation || "").trim()
+
+      if (!nextGeneratedQuestion || !answer || !explanation) {
+        throw new Error("Generation succeeded but response is incomplete. Please retry.")
+      }
+
+      setGeneratedQuestion(nextGeneratedQuestion)
+      setAnswerExplanation(`Answer:\n${answer}\n\nStep-by-step explanation:\n${explanation}`)
+    } catch (requestError) {
+      const message =
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to generate the question right now. Please try again."
+      setError(message)
+      setLastRequestFailed(true)
+    } finally {
       setIsLoading(false)
-      setError("Generation is not connected yet. This will be enabled in Phase 2.")
-    }, 400)
+    }
   }
 
   return (
@@ -55,9 +183,14 @@ export default function DseMathGeneratorPage() {
         </div>
 
         {error && (
-          <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {error}
-          </p>
+          <div className="flex flex-col gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-destructive">{error}</p>
+            {lastRequestFailed && (
+              <Button onClick={handleGenerate} disabled={!selectedFile || isLoading} size="sm">
+                Retry
+              </Button>
+            )}
+          </div>
         )}
 
         <section className="grid gap-6 lg:grid-cols-3">
@@ -73,19 +206,47 @@ export default function DseMathGeneratorPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <Input
+                ref={fileInputRef}
                 type="file"
                 accept="image/png,image/jpeg,image/jpg,image/webp"
                 onChange={handleFileChange}
               />
               <p className="text-sm text-muted-foreground">Selected: {selectedFileName}</p>
-              <Button
-                className="w-full"
-                disabled={!selectedFile || isLoading}
-                onClick={handleGenerateStub}
-              >
-                <Sparkles className="h-4 w-4" />
-                {isLoading ? "Preparing..." : "Generate Similar Question"}
-              </Button>
+              {selectedFile && <p className="text-xs text-muted-foreground">Size: {formattedFileSize}</p>}
+
+              {previewUrl && (
+                <div className="overflow-hidden rounded-md border border-border">
+                  <img
+                    src={previewUrl}
+                    alt="Selected math question preview"
+                    className="h-40 w-full object-cover"
+                  />
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Button className="flex-1" disabled={!selectedFile || isLoading} onClick={handleGenerate}>
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-4 w-4" />
+                      Generate Similar Question
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={!selectedFile || isLoading}
+                  onClick={resetFileSelection}
+                >
+                  <X className="h-4 w-4" />
+                  Reset
+                </Button>
+              </div>
             </CardContent>
           </Card>
 
@@ -96,7 +257,7 @@ export default function DseMathGeneratorPage() {
                 Generated Question
               </CardTitle>
               <CardDescription>
-                Similar question output will appear here after backend integration.
+                Generated similar question from your uploaded source image.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -104,7 +265,7 @@ export default function DseMathGeneratorPage() {
                 <p className="whitespace-pre-wrap leading-relaxed text-foreground">{generatedQuestion}</p>
               ) : (
                 <p className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">
-                  Placeholder: generated similar question will be shown in Phase 2.
+                  Upload a valid image and click Generate to see a similar DSE-style question here.
                 </p>
               )}
             </CardContent>
@@ -125,7 +286,7 @@ export default function DseMathGeneratorPage() {
                 <p className="whitespace-pre-wrap leading-relaxed text-foreground">{answerExplanation}</p>
               ) : (
                 <p className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">
-                  Placeholder: answer and step explanation will be shown in Phase 2.
+                  The answer and step-by-step explanation will appear after successful generation.
                 </p>
               )}
             </CardContent>
