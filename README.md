@@ -12,6 +12,14 @@ npm run dev
 
 Open: `http://localhost:3000`
 
+### Environment Variables
+
+Create `dse_app/.env` (or copy from `.env.example`) with:
+
+- `GITHUB_MODEL_API_KEY_gpt5` (required): used by `/api/generate-math-question`.
+- `NEXT_PUBLIC_XAI_API_KEY` (required for graph image generation): used when user clicks **Generate Graph**.
+- `NEXT_PUBLIC_GITHUB_LLM_TOKEN` (required for practice questions page direct generation).
+
 ## DSE Math Question Generator
 
 This feature lets users upload a math question image and generates:
@@ -21,6 +29,9 @@ This feature lets users upload a math question image and generates:
 - step-by-step explanation
 - math topic
 - concept explanation
+- graph metadata (`needsGraph`, `graphType`, `figureDescription`, `imagePrompt`)
+
+When the generated question needs a graph/diagram illustration, the UI shows a **Generate Graph** button. The graph is generated only after user click (manual trigger).
 
 ### Function Flow
 

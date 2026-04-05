@@ -18,6 +18,10 @@ interface GenerateMathQuestionResponse {
   stepExplanation?: string
   mathTopic?: string
   conceptExplanation?: string
+  needsGraph?: boolean
+  graphType?: "none" | "coordinate-graph" | "geometry-diagram" | "stat-plot"
+  figureDescription?: string
+  imagePrompt?: string
   explanation?: string
   sourceExtractionMode?: "vision-primary" | "ocr-fallback"
   ocrExtractedText?: string
@@ -119,6 +123,13 @@ export default function DseMathGeneratorPage() {
   const [conceptSummary, setConceptSummary] = useState("")
   const [answerExplanation, setAnswerExplanation] = useState("")
   const [ocrExtractedText, setOcrExtractedText] = useState("")
+  const [needsGraph, setNeedsGraph] = useState(false)
+  const [graphType, setGraphType] = useState<"none" | "coordinate-graph" | "geometry-diagram" | "stat-plot">("none")
+  const [figureDescription, setFigureDescription] = useState("")
+  const [imagePrompt, setImagePrompt] = useState("")
+  const [graphImageUrl, setGraphImageUrl] = useState("")
+  const [isGeneratingGraph, setIsGeneratingGraph] = useState(false)
+  const [graphError, setGraphError] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [sampleLoadingName, setSampleLoadingName] = useState<string | null>(null)
   const [error, setError] = useState("")
@@ -155,6 +166,13 @@ export default function DseMathGeneratorPage() {
     setConceptSummary("")
     setAnswerExplanation("")
     setOcrExtractedText("")
+    setNeedsGraph(false)
+    setGraphType("none")
+    setFigureDescription("")
+    setImagePrompt("")
+    setGraphImageUrl("")
+    setIsGeneratingGraph(false)
+    setGraphError("")
     setSourceMode("")
   }
 
@@ -309,6 +327,17 @@ export default function DseMathGeneratorPage() {
       setConceptSummary(`### Topic\n\n${mathTopic}\n\n### Concept Used\n\n${conceptExplanation}`)
       setAnswerExplanation(`### Answer\n\n${answer}\n\n### Step-by-step explanation\n\n${explanation}`)
       setOcrExtractedText(payload.ocrExtractedText?.trim() || "")
+      const nextNeedsGraph = payload.needsGraph === true
+      const nextGraphType = payload.graphType || "none"
+      const nextFigureDescription = payload.figureDescription?.trim() || ""
+      const nextImagePrompt = payload.imagePrompt?.trim() || ""
+
+      setNeedsGraph(nextNeedsGraph)
+      setGraphType(nextNeedsGraph ? nextGraphType : "none")
+      setFigureDescription(nextNeedsGraph ? nextFigureDescription : "")
+      setImagePrompt(nextNeedsGraph ? nextImagePrompt : "")
+      setGraphImageUrl("")
+      setGraphError("")
       setSourceMode(payload.sourceExtractionMode || "")
     } catch (requestError) {
       const message =
@@ -319,6 +348,59 @@ export default function DseMathGeneratorPage() {
       setLastRequestFailed(true)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const handleGenerateGraph = async () => {
+    if (!needsGraph) {
+      setGraphError("This generated question does not require a graph.")
+      return
+    }
+
+    if (!imagePrompt) {
+      setGraphError("No graph prompt was returned for this question. Please regenerate the question.")
+      return
+    }
+
+    if (!process.env.NEXT_PUBLIC_XAI_API_KEY) {
+      setGraphError("Missing NEXT_PUBLIC_XAI_API_KEY in your environment. Add it to enable graph generation.")
+      return
+    }
+
+    setIsGeneratingGraph(true)
+    setGraphError("")
+
+    try {
+      const response = await fetch("https://api.x.ai/v1/images/generations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.NEXT_PUBLIC_XAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: "grok-imagine-image",
+          prompt: imagePrompt,
+          n: 1,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Graph generation failed (${response.status}): ${errorText}`)
+      }
+
+      const payload = await response.json()
+      const nextUrl = payload?.data?.[0]?.url
+      if (!nextUrl || typeof nextUrl !== "string") {
+        throw new Error("Graph generation succeeded but no image URL was returned.")
+      }
+
+      setGraphImageUrl(nextUrl)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to generate graph right now."
+      setGraphError(message)
+    } finally {
+      setIsGeneratingGraph(false)
     }
   }
 
@@ -519,6 +601,53 @@ export default function DseMathGeneratorPage() {
                           {conceptSummary}
                         </ReactMarkdown>
                       </div>
+                    </div>
+                  )}
+
+                  {needsGraph && (
+                    <div className="space-y-4 rounded-md border border-amber-300 bg-amber-50/70 px-4 py-4">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+                          Graph Illustration ({graphType.replace("-", " ")})
+                        </p>
+                        {figureDescription ? (
+                          <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+                            {figureDescription}
+                          </p>
+                        ) : (
+                          <p className="mt-2 text-sm text-muted-foreground">
+                            A graph is recommended for this question.
+                          </p>
+                        )}
+                      </div>
+
+                      {graphError && (
+                        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                          {graphError}
+                        </p>
+                      )}
+
+                      {graphImageUrl ? (
+                        <img
+                          src={graphImageUrl}
+                          alt="Generated graph for the math question"
+                          className="w-full rounded-md border border-amber-200 object-contain"
+                        />
+                      ) : (
+                        <Button onClick={handleGenerateGraph} disabled={isGeneratingGraph}>
+                          {isGeneratingGraph ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Generating graph...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="h-4 w-4" />
+                              Generate Graph
+                            </>
+                          )}
+                        </Button>
+                      )}
                     </div>
                   )}
                 </div>

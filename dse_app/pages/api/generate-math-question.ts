@@ -23,6 +23,10 @@ type GenerateResponse = {
   stepExplanation: string
   mathTopic: string
   conceptExplanation: string
+  needsGraph: boolean
+  graphType: "none" | "coordinate-graph" | "geometry-diagram" | "stat-plot"
+  figureDescription: string
+  imagePrompt: string
   sourceExtractionMode: "vision-primary" | "ocr-fallback"
   ocrExtractedText: string
 }
@@ -33,6 +37,10 @@ type GenerateResult = {
   stepExplanation?: string
   mathTopic?: string
   conceptExplanation?: string
+  needsGraph?: boolean
+  graphType?: "none" | "coordinate-graph" | "geometry-diagram" | "stat-plot" | string
+  figureDescription?: string
+  imagePrompt?: string
 }
 
 type ApiErrorResponse = {
@@ -110,6 +118,46 @@ function parseGenerateResult(rawText: string): GenerateResult {
     mathTopic: typeof parsed.mathTopic === "string" ? parsed.mathTopic.trim() : "",
     conceptExplanation:
       typeof parsed.conceptExplanation === "string" ? parsed.conceptExplanation.trim() : "",
+    needsGraph: typeof parsed.needsGraph === "boolean" ? parsed.needsGraph : false,
+    graphType: typeof parsed.graphType === "string" ? parsed.graphType.trim() : "none",
+    figureDescription:
+      typeof parsed.figureDescription === "string" ? parsed.figureDescription.trim() : "",
+    imagePrompt: typeof parsed.imagePrompt === "string" ? parsed.imagePrompt.trim() : "",
+  }
+}
+
+function normalizeGraphType(value: GenerateResult["graphType"]): GenerateResponse["graphType"] {
+  if (
+    value === "coordinate-graph" ||
+    value === "geometry-diagram" ||
+    value === "stat-plot"
+  ) {
+    return value
+  }
+  return "none"
+}
+
+function normalizeGraphFields(parsed: GenerateResult): Pick<GenerateResponse, "needsGraph" | "graphType" | "figureDescription" | "imagePrompt"> {
+  const normalizedType = normalizeGraphType(parsed.graphType)
+  const figureDescription = parsed.figureDescription?.trim() || ""
+  const imagePrompt = parsed.imagePrompt?.trim() || ""
+  const requestedGraph = parsed.needsGraph === true
+  const hasRenderablePrompt = imagePrompt.length > 0
+
+  if (!requestedGraph || !hasRenderablePrompt || normalizedType === "none") {
+    return {
+      needsGraph: false,
+      graphType: "none",
+      figureDescription: "",
+      imagePrompt: "",
+    }
+  }
+
+  return {
+    needsGraph: true,
+    graphType: normalizedType,
+    figureDescription,
+    imagePrompt,
   }
 }
 
@@ -214,7 +262,13 @@ function buildGenerationPrompt(sourceQuestion: string): string {
     "Create ONE new question similar in style, topic, and difficulty to the source question.",
     "Then provide the exact answer, concise step-by-step explanation, the math topic name, and concept explanation suitable for students.",
     "Return ONLY valid JSON with this exact schema:",
-    '{"generatedQuestion":"string","answer":"string","stepExplanation":"string","mathTopic":"string","conceptExplanation":"string"}',
+    '{"generatedQuestion":"string","answer":"string","stepExplanation":"string","mathTopic":"string","conceptExplanation":"string","needsGraph":true|false,"graphType":"none|coordinate-graph|geometry-diagram|stat-plot","figureDescription":"string","imagePrompt":"string"}',
+    "Set needsGraph=true only if the generated question requires a visual graph/diagram to solve.",
+    "If needsGraph=false, you MUST set graphType to 'none' and both figureDescription and imagePrompt to empty strings.",
+    "If needsGraph=true, you MUST provide a concrete graphType plus a detailed figureDescription and imagePrompt.",
+    "imagePrompt must be specific enough for an image model to draw the exact required graph or diagram.",
+    "For non-visual algebra/number questions, set needsGraph=false.",
+    "For coordinate geometry, function graphs, statistics plots, or geometry figure-based questions, set needsGraph=true.",
     "The stepExplanation must be detailed and easy to read for students (at least 5 complete steps).",
     "Do NOT use bullet points for stepExplanation. Use short paragraphs or numbered Step 1, Step 2 style.",
     "Use this exact repeating style for each step: 'Step N: short explanation sentence' then on the next line a related formula in block math $$...$$.",
@@ -233,7 +287,13 @@ function buildVisionGenerationInstruction(): string {
     "Read the uploaded question image and create ONE new question with similar topic and difficulty.",
     "Then provide the exact answer, concise step-by-step explanation, the math topic name, and concept explanation suitable for students.",
     "Return ONLY valid JSON with this exact schema:",
-    '{"generatedQuestion":"string","answer":"string","stepExplanation":"string","mathTopic":"string","conceptExplanation":"string"}',
+    '{"generatedQuestion":"string","answer":"string","stepExplanation":"string","mathTopic":"string","conceptExplanation":"string","needsGraph":true|false,"graphType":"none|coordinate-graph|geometry-diagram|stat-plot","figureDescription":"string","imagePrompt":"string"}',
+    "Set needsGraph=true only if the generated question requires a visual graph/diagram to solve.",
+    "If needsGraph=false, you MUST set graphType to 'none' and both figureDescription and imagePrompt to empty strings.",
+    "If needsGraph=true, you MUST provide a concrete graphType plus a detailed figureDescription and imagePrompt.",
+    "imagePrompt must be specific enough for an image model to draw the exact required graph or diagram.",
+    "For non-visual algebra/number questions, set needsGraph=false.",
+    "For coordinate geometry, function graphs, statistics plots, or geometry figure-based questions, set needsGraph=true.",
     "The stepExplanation must be detailed and easy to read for students (at least 5 complete steps).",
     "Do NOT use bullet points for stepExplanation. Use short paragraphs or numbered Step 1, Step 2 style.",
     "Use this exact repeating style for each step: 'Step N: short explanation sentence' then on the next line a related formula in block math $$...$$.",
@@ -358,12 +418,18 @@ async function handler(req: NextApiRequest, res: NextApiResponse<GenerateRespons
       return
     }
 
+    const normalizedGraph = normalizeGraphFields(parsed)
+
     res.status(200).json({
       generatedQuestion: parsed.generatedQuestion,
       answer: parsed.answer,
       stepExplanation: parsed.stepExplanation,
       mathTopic: parsed.mathTopic,
       conceptExplanation: parsed.conceptExplanation,
+      needsGraph: normalizedGraph.needsGraph,
+      graphType: normalizedGraph.graphType,
+      figureDescription: normalizedGraph.figureDescription,
+      imagePrompt: normalizedGraph.imagePrompt,
       sourceExtractionMode: extractionMode,
       ocrExtractedText: ocrText,
     })
