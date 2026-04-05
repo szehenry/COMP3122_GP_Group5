@@ -30,7 +30,7 @@ interface GenerateMathQuestionResponse {
 
 const ALLOWED_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp"])
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
-const SAMPLE_IMAGE_NAMES = ["testq1.png", "testq2.png", "testq3.png"]
+const SAMPLE_IMAGE_NAMES = ["testq1.png", "testq2.png", "testq3.png", "testq8.png"]
 
 function normalizeMathMarkdown(input: string): string {
   if (!input) {
@@ -230,7 +230,10 @@ export default function DseMathGeneratorPage() {
     resetOutput()
 
     try {
-      const response = await fetch(`/samples/${sampleName}`)
+      let response = await fetch(`/samples/${sampleName}`)
+      if (!response.ok) {
+        response = await fetch(`/${sampleName}`)
+      }
       if (!response.ok) {
         throw new Error("Unable to load sample question image.")
       }
