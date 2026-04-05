@@ -1,7 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next"
 import { IncomingForm, type File as FormidableFile, type Files } from "formidable"
 import fs from "fs"
-import Tesseract from "tesseract.js"
 import ModelClient, { isUnexpected } from "@azure-rest/ai-inference"
 import { AzureKeyCredential } from "@azure/core-auth"
 
@@ -164,10 +163,17 @@ function mapFormidableError(error: unknown): { status: number; message: string }
 }
 
 async function extractQuestionViaOcr(filePath: string): Promise<string> {
+  // Lazy import prevents serverless cold-start crashes if tesseract worker internals are not bundled.
+  const tesseractModule = await import("tesseract.js")
+  const recognize = tesseractModule.default?.recognize ?? tesseractModule.recognize
+  if (typeof recognize !== "function") {
+    throw new Error("Tesseract recognize function is unavailable")
+  }
+
   const buffer = fs.readFileSync(filePath)
   const {
     data: { text },
-  } = await Tesseract.recognize(buffer, "eng+chi_tra")
+  } = await recognize(buffer, "eng+chi_tra")
   return normalizeExtractedText(text)
 }
 
@@ -278,7 +284,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse<GenerateRespons
     const endpoint = "https://models.github.ai/inference"
     const client = ModelClient(endpoint, new AzureKeyCredential(token))
 
-    const ocrText = await extractQuestionViaOcr(uploadedPath).catch(() => "")
+    let ocrText = ""
     let extractionMode: "vision-primary" | "ocr-fallback" = "vision-primary"
 
     let generationResponse = await postChatWithModelFallback(client, {
@@ -302,7 +308,8 @@ async function handler(req: NextApiRequest, res: NextApiResponse<GenerateRespons
     } as any)
 
     if (isUnexpected(generationResponse)) {
-      // If vision generation fails, fallback to OCR text generation when possible.
+      // OCR is only attempted when vision generation fails to reduce runtime overhead and bundling risk.
+      ocrText = await extractQuestionViaOcr(uploadedPath).catch(() => "")
       const sourceQuestion = normalizeExtractedText(ocrText)
       if (sourceQuestion.length < 20) {
         res.status(502).json({ error: "Vision generation failed and OCR fallback was insufficient." })
